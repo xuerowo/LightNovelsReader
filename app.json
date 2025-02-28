@@ -1,28 +1,65 @@
 {
   "expo": {
-    "name": "LightNovelsReader",
-    "slug": "LightNovelsReader",
-    "version": "1.0.0",
+    "name": "輕小說雲境",
+    "slug": "lightnovelsreader",
+    "version": "1.2.6",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "userInterfaceStyle": "automatic",
+    "platforms": ["ios", "android", "web"],
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#58B4FF"
     },
+    "updates": {
+      "fallbackToCacheTimeout": 0
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.xuerowo.lightnovelsreader",
+      "infoPlist": {
+        "CFBundleDisplayName": "輕小說雲境"
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
-      }
+        "backgroundColor": "#000000",
+        "monochromeImage": "./assets/adaptive-icon.png"
+      },
+      "permissions": [
+        "NOTIFICATIONS",
+        "RECEIVE_BOOT_COMPLETED",
+        "SCHEDULE_EXACT_ALARM",
+        "VIBRATE",
+        "WAKE_LOCK"
+      ],
+      "package": "com.xuerowo.lightnovelsreader",
+      "versionCode": 9
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#000000",
+          "mode": "production"
+        }
+      ]
+    ],
+    "newArchEnabled": true,
+    "extra": {
+      "eas": {
+        "projectId": "49edcc74-167d-4829-8a18-173b6414f435"
+      }
+    },
+    "owner": "xuerowo"
   }
 }
