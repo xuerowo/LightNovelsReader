@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, Image, StyleSheet } from 'react-native';
 import { Novel, Chapter } from '../types/novelTypes';
+import { resolveCoverUrl } from '../utils/pathUtils';
 
 interface NovelCardProps {
   novel: Novel;
   onPress: (novel: Novel) => void;
   isDarkMode?: boolean;
   forceRefresh?: boolean;
+  onImagePress?: (imageUri: string) => void;
 }
 
 const formatDateTime = (dateStr: string) => {
@@ -53,10 +55,13 @@ const NovelCard: React.FC<NovelCardProps> = ({
   novel,
   onPress,
   isDarkMode = false,
-  forceRefresh = false
+  forceRefresh = false,
+  onImagePress
 }) => {
   const [imageError, setImageError] = useState(false);
-  const coverUrl = novel.cover + (forceRefresh ? `?t=${Date.now()}` : '');
+  const resolvedCoverUrl = resolveCoverUrl(novel.cover);
+  // 總是添加時間戳以確保獲取最新圖片
+  const coverUrl = `${resolvedCoverUrl}?t=${Date.now()}`;
   
   return (
     <TouchableOpacity
@@ -71,14 +76,52 @@ const NovelCard: React.FC<NovelCardProps> = ({
       activeOpacity={0.7}
     >
       <View style={[styles.imageContainer, { backgroundColor: isDarkMode ? '#1c1c1c' : '#ffffff' }]}>
-        <Image
-          source={{ uri: imageError ? "/api/placeholder/160/240" : coverUrl,
-            cache: forceRefresh ? 'reload' : 'default'
-          }}
-          style={styles.image}
-          resizeMode="cover"
-          onError={() => setImageError(true)}
-        />
+        {onImagePress ? (
+          <TouchableOpacity
+            onPress={(e) => {
+              e.stopPropagation();
+              onImagePress(coverUrl);
+            }}
+            activeOpacity={0.8}
+            style={styles.imageWrapper}
+          >
+            {imageError ? (
+              <View style={[styles.placeholderContainer, { backgroundColor: isDarkMode ? '#333' : '#f0f0f0' }]}>
+                <Text style={[styles.placeholderText, { color: isDarkMode ? '#888' : '#666' }]}>
+                  封面圖片
+                </Text>
+              </View>
+            ) : (
+              <Image
+                source={{ uri: coverUrl,
+                  cache: 'reload'
+                }}
+                style={styles.image}
+                resizeMode="cover"
+                onError={() => setImageError(true)}
+              />
+            )}
+          </TouchableOpacity>
+        ) : (
+          <>
+            {imageError ? (
+              <View style={[styles.placeholderContainer, { backgroundColor: isDarkMode ? '#333' : '#f0f0f0' }]}>
+                <Text style={[styles.placeholderText, { color: isDarkMode ? '#888' : '#666' }]}>
+                  封面圖片
+                </Text>
+              </View>
+            ) : (
+              <Image
+                source={{ uri: coverUrl,
+                  cache: 'reload'
+                }}
+                style={styles.image}
+                resizeMode="cover"
+                onError={() => setImageError(true)}
+              />
+            )}
+          </>
+        )}
       </View>
       <View style={[
         styles.cardInfo,
@@ -112,7 +155,7 @@ const NovelCard: React.FC<NovelCardProps> = ({
           <Text style={[
             styles.lastUpdated,
             { color: isDarkMode ? '#e1e1e1' : '#333333', fontSize: 11 }
-          ]}>
+          ]} numberOfLines={1}>
             {formatDateTime(novel.lastUpdated)}
           </Text>
         </View>
@@ -145,6 +188,10 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: '#f0f0f0',
   },
+  imageWrapper: {
+    width: '100%',
+    height: '100%',
+  },
   image: {
     width: '100%',
     height: '100%',
@@ -168,10 +215,34 @@ const styles = StyleSheet.create({
   author: {
     flex: 1,
     marginRight: 8,
+    minWidth: 0, // 允許文字收縮
   },
   lastUpdated: {
     textAlign: 'right',
+    flexShrink: 0,
+    minWidth: 80, // 增加最小寬度以確保日期完整顯示
+    maxWidth: 80, // 設定最大寬度防止過長
+  },
+  placeholderContainer: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  placeholderText: {
+    fontSize: 12,
+    fontWeight: '400',
+    textAlign: 'center',
   }
 });
 
-export default NovelCard;
+// 使用 React.memo 優化渲染性能，只有 props 變化時才重新渲染
+export default React.memo(NovelCard, (prevProps, nextProps) => {
+  return (
+    prevProps.novel.title === nextProps.novel.title &&
+    prevProps.novel.lastUpdated === nextProps.novel.lastUpdated &&
+    prevProps.isDarkMode === nextProps.isDarkMode &&
+    prevProps.forceRefresh === nextProps.forceRefresh &&
+    prevProps.onImagePress === nextProps.onImagePress
+  );
+});

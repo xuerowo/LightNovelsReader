@@ -9,35 +9,50 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "@expo/vector-icons": "^14.0.2",
-    "@react-native-async-storage/async-storage": "1.23.1",
-    "@react-native-community/slider": "4.5.5",
+    "@expo/vector-icons": "^14.1.0",
+    "@react-native-async-storage/async-storage": "2.1.2",
+    "@react-native-community/slider": "4.5.6",
+    "@react-navigation/native": "^7.0.17",
+    "@react-navigation/stack": "^7.2.1",
     "diff": "^7.0.0",
-    "expo": "~52.0.36",
-    "expo-background-fetch": "~13.0.5",
-    "expo-notifications": "~0.29.13",
-    "expo-status-bar": "~2.0.1",
-    "expo-system-ui": "~4.0.8",
-    "expo-task-manager": "~12.0.5",
+    "expo": "53.0.12",
+    "expo-application": "~6.1.4",
+    "expo-background-fetch": "~13.1.5",
+    "expo-image": "^2.3.0",
+    "expo-notifications": "~0.31.3",
+    "expo-status-bar": "~2.2.3",
+    "expo-system-ui": "~5.0.9",
+    "expo-task-manager": "~13.1.5",
     "lodash.debounce": "^4.0.8",
-    "react": "18.3.1",
-    "react-native": "0.76.7",
+    "react": "19.0.0",
+    "react-native": "0.79.4",
+    "react-native-gesture-handler": "~2.24.0",
     "react-native-markdown-display": "^7.0.2",
-    "react-native-svg": "15.8.0",
-    "expo-application": "~6.0.2"
+    "react-native-navigation-bar-color": "^2.0.2",
+    "react-native-safe-area-context": "5.4.0",
+    "react-native-svg": "15.11.2"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
+    "@types/babel__core": "^7.20.5",
+    "@types/babel__generator": "^7.6.8",
+    "@types/babel__template": "^7.4.4",
+    "@types/babel__traverse": "^7.20.6",
     "@types/diff": "^7.0.1",
+    "@types/istanbul-lib-report": "^3.0.3",
+    "@types/istanbul-reports": "^3.0.4",
     "@types/lodash.debounce": "^4.0.9",
-    "@types/react": "~18.3.12",
+    "@types/react": "~19.0.10",
     "babel-plugin-transform-remove-console": "^6.9.4",
-    "typescript": "^5.3.3"
+    "typescript": "~5.8.3"
   },
   "expo": {
     "doctor": {
       "reactNativeDirectoryCheck": {
-        "listUnknownPackages": false
+        "listUnknownPackages": false,
+        "exclude": [
+          "react-native-navigation-bar-color"
+        ]
       }
     }
   },

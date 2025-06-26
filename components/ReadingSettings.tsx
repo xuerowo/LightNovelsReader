@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
@@ -19,7 +19,7 @@ interface ReadingSettingsProps {
 export const DEFAULT_FONT_SIZE = 18;
 export const DEFAULT_LINE_HEIGHT = 1.5;
 
-const ReadingSettings: React.FC<ReadingSettingsProps> = ({
+const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
   visible,
   onClose,
   isDarkMode,
@@ -31,15 +31,71 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = ({
   theme,
   onThemeChange
 }) => {
-  const translateY = React.useRef(new Animated.Value(300)).current;
-
-  React.useEffect(() => {
+  const translateY = useRef(new Animated.Value(300)).current;
+  
+  // 本地狀態管理，提供即時視覺回饋
+  const [localFontSize, setLocalFontSize] = useState(fontSize);
+  const [localLineHeight, setLocalLineHeight] = useState(lineHeight);
+  
+  // 防抖計時器
+  const fontSizeTimeoutRef = useRef<number | null>(null);
+  const lineHeightTimeoutRef = useRef<number | null>(null);
+  
+  // 同步外部狀態到本地狀態
+  useEffect(() => {
+    setLocalFontSize(fontSize);
+  }, [fontSize]);
+  
+  useEffect(() => {
+    setLocalLineHeight(lineHeight);
+  }, [lineHeight]);
+  
+  // 動畫效果
+  useEffect(() => {
     Animated.spring(translateY, {
       toValue: visible ? 0 : 300,
       useNativeDriver: true,
       friction: 8
     }).start();
-  }, [visible]);
+  }, [visible, translateY]);
+  
+  // 清理計時器
+  useEffect(() => {
+    return () => {
+      if (fontSizeTimeoutRef.current) {
+        clearTimeout(fontSizeTimeoutRef.current);
+      }
+      if (lineHeightTimeoutRef.current) {
+        clearTimeout(lineHeightTimeoutRef.current);
+      }
+    };
+  }, []);
+  
+  // 防抖處理字體大小變更
+  const handleFontSizeChange = useCallback((value: number) => {
+    setLocalFontSize(value);
+    
+    if (fontSizeTimeoutRef.current) {
+      clearTimeout(fontSizeTimeoutRef.current);
+    }
+    
+    fontSizeTimeoutRef.current = setTimeout(() => {
+      onFontSizeChange(value);
+    }, 300) as any;
+  }, [onFontSizeChange]);
+  
+  // 防抖處理行距變更
+  const handleLineHeightChange = useCallback((value: number) => {
+    setLocalLineHeight(value);
+    
+    if (lineHeightTimeoutRef.current) {
+      clearTimeout(lineHeightTimeoutRef.current);
+    }
+    
+    lineHeightTimeoutRef.current = setTimeout(() => {
+      onLineHeightChange(value);
+    }, 300) as any;
+  }, [onLineHeightChange]);
 
   if (!visible) return null;
 
@@ -119,12 +175,14 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = ({
               style={styles.slider}
               minimumValue={14}
               maximumValue={24}
-              value={fontSize}
-              onValueChange={onFontSizeChange}
+              value={localFontSize}
+              onValueChange={handleFontSizeChange}
               minimumTrackTintColor="#2196F3"
               maximumTrackTintColor={theme === 'light' ? '#cccccc' : theme === 'dark' ? '#666666' : '#cccccc'}
             />
-            <MaterialIcons name="format-size" size={24} color={theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a'} />
+            <Text style={[styles.valueText, { color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a' }]}>
+              {Math.round(localFontSize)}
+            </Text>
           </View>
         </View>
 
@@ -138,13 +196,13 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = ({
               style={styles.slider}
               minimumValue={1.5}
               maximumValue={2.0}
-              value={lineHeight}
-              onValueChange={onLineHeightChange}
+              value={localLineHeight}
+              onValueChange={handleLineHeightChange}
               minimumTrackTintColor="#2196F3"
               maximumTrackTintColor={theme === 'light' ? '#cccccc' : theme === 'dark' ? '#666666' : '#cccccc'}
             />
             <Text style={[styles.valueText, { color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a' }]}>
-              {lineHeight.toFixed(1)}
+              {localLineHeight.toFixed(1)}
             </Text>
           </View>
         </View>
@@ -155,7 +213,16 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = ({
       </Animated.View>
     </View>
   );
-};
+}, (prevProps, nextProps) => {
+  // 自定義比較函數，只有關鍵 props 改變時才重新渲染
+  return (
+    prevProps.visible === nextProps.visible &&
+    prevProps.fontSize === nextProps.fontSize &&
+    prevProps.lineHeight === nextProps.lineHeight &&
+    prevProps.theme === nextProps.theme &&
+    prevProps.isDarkMode === nextProps.isDarkMode
+  );
+});
 
 const styles = StyleSheet.create({
   overlay: {

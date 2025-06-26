@@ -1,6 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+﻿import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
-  SafeAreaView,
   ScrollView,
   Text,
   View,
@@ -19,14 +18,20 @@ import {
   Dimensions,
   AppState,
   Linking,
+  RefreshControl,
+  Modal,
+  Pressable,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Image as ExpoImage } from 'expo-image';
 import NovelGrid from './components/NovelGrid';
 import * as Notifications from 'expo-notifications';
 import * as ExpoBackgroundFetch from 'expo-background-fetch';
 import * as TaskManager from 'expo-task-manager';
 import * as Application from 'expo-application';
 import Constants from 'expo-constants';
+import * as SystemUI from 'expo-system-ui';
 import debounce from 'lodash.debounce';
 import { MaterialIcons } from '@expo/vector-icons';
 import Markdown from 'react-native-markdown-display';
@@ -36,22 +41,46 @@ import ReadingSettings, {
 } from './components/ReadingSettings';
 import SearchBar from './components/SearchBar';
 import SortSelector, { SortOption } from './components/SortSelector';
-import { RefreshControl } from 'react-native';
 import { Novel, Chapter } from './types/novelTypes';
 import * as diff from 'diff';
 import logger from './utils/logger';
+import { resolveChapterUrl, resolveImageUrl, resolveCoverUrl } from './utils/pathUtils';
+
+// 安全的導航欄顏色函數
+const safeChangeNavigationBarColor = (color: string, isLight: boolean, animated: boolean) => {
+  try {
+    const navigationBarColorModule = require('react-native-navigation-bar-color');
+    const changeFunc = navigationBarColorModule.default || navigationBarColorModule;
+    if (typeof changeFunc === 'function') {
+      return changeFunc(color, isLight, animated);
+    }
+  } catch (error) {
+    // 在 Expo Go 或不支持的環境中會失敗，這是正常的
+    if (__DEV__ && Constants.appOwnership === 'expo') {
+      console.warn('📱 導航欄顏色功能在 Expo Go 中不可用，請使用 development build 或發布版本查看效果');
+    }
+  }
+  return Promise.resolve();
+};
 
 const BACKGROUND_FETCH_TASK = 'background-fetch';
-const GITHUB_RAW_URL = 'https://raw.githubusercontent.com/xuerowo/myacg/main/輕小說翻譯/';
-const STATUS_BAR_HEIGHT = Platform.OS === 'ios' ? 44 : StatusBar.currentHeight || 0;
+const GITHUB_RAW_URL = 'https://raw.githubusercontent.com/xuerowo/myacgn/main/輕小說翻譯/';
+// 移除硬編碼的 STATUS_BAR_HEIGHT，改用 SafeAreaView 的 insets
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
+// 檢查是否在支持的環境中再設置通知處理器
+const isNotificationSupported = Constants.appOwnership !== 'expo';
+
+if (isNotificationSupported) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    }),
+  });
+}
 
 interface ChapterInfo {
   name: string;
@@ -73,7 +102,6 @@ interface Settings {
   fontSize: number;
   lineHeight: number;
   theme: 'light' | 'dark' | 'eyeComfort';
-  readingTime: Record<string, number>; // 記錄每本小說的總閱讀時間(秒)
 }
 
 interface ScrollPositions {
@@ -106,9 +134,16 @@ interface MarkdownImageProps {
   src: string;
   isDarkMode: boolean;
   backgroundColor: string;
+  onImagePress?: (imageUri: string) => void;
 }
 
 async function registerBackgroundFetch() {
+  // 背景任務在 Expo Go 中也可能受限
+  if (!isNotificationSupported) {
+    logger.warn('背景任務在 Expo Go 中不完全支持');
+    return;
+  }
+  
   try {
     await ExpoBackgroundFetch.registerTaskAsync(BACKGROUND_FETCH_TASK, {
       minimumInterval: 60 * 15,
@@ -119,6 +154,42 @@ async function registerBackgroundFetch() {
     logger.error("Task Register failed:", err);
   }
 }
+
+// 批次 AsyncStorage 寫入系統
+const batchWriteQueue = new Map<string, any>();
+let batchWriteTimer: number | null = null;
+
+const flushBatchWrites = async (): Promise<void> => {
+  if (batchWriteQueue.size === 0) return;
+  
+  try {
+    const operations: Array<[string, string]> = [];
+    
+    for (const [key, data] of batchWriteQueue.entries()) {
+      if (key.startsWith('chapter_')) {
+        operations.push([key, data]);
+      } else {
+        operations.push([key, JSON.stringify(data)]);
+      }
+    }
+    
+    await AsyncStorage.multiSet(operations);
+    batchWriteQueue.clear();
+  } catch (err) {
+    logger.error('批次保存失敗:', err);
+    batchWriteQueue.clear();
+  }
+};
+
+const batchSaveLocalData = (key: string, data: any): void => {
+  batchWriteQueue.set(key, data);
+  
+  if (batchWriteTimer) {
+    clearTimeout(batchWriteTimer);
+  }
+  
+  batchWriteTimer = setTimeout(flushBatchWrites, 1000) as any;
+};
 
 const saveLocalData = async (key: string, data: any): Promise<void> => {
   try {
@@ -156,6 +227,7 @@ TaskManager.defineTask(BACKGROUND_FETCH_TASK, async () => {
     await checkNovelUpdates();
     return ExpoBackgroundFetch.BackgroundFetchResult.NewData;
   } catch (error) {
+    logger.error('背景任務執行失敗:', error);
     return ExpoBackgroundFetch.BackgroundFetchResult.Failed;
   }
 });
@@ -202,7 +274,6 @@ const cleanExpiredNewLabels = async (): Promise<void> => {
     // 如果有變更，保存更新後的記錄
     if (hasChanges) {
       await AsyncStorage.setItem('chapters_records', JSON.stringify(allChaptersRecord));
-    } else {
     }
   } catch (error) {
     logger.error('清理過期標記失敗:', error);
@@ -220,8 +291,16 @@ const checkNovelUpdates = async () => {
       return { hasUpdates: false, updates: [] };
     }
 
-    // 獲取遠程小說列表
-    const response = await fetch('https://raw.githubusercontent.com/xuerowo/myacg/main/輕小說翻譯/novels.json');
+    // 獲取遠程小說列表（添加 cache-busting）
+    const timestamp = Date.now();
+    const response = await fetch(`https://raw.githubusercontent.com/xuerowo/myacgn/main/輕小說翻譯/novels.json?t=${timestamp}`, {
+      cache: 'no-cache',
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      }
+    });
     if (!response.ok) {
       throw new Error('無法獲取遠程小說列表');
     }
@@ -315,7 +394,7 @@ const formatChapterDateTime = (dateStr: string) => {
     if (!datePart) return '';
     
     const [year, month, day] = datePart.split('-').map(num => parseInt(num, 10));
-    if (!year || !month || !day) return '';
+    if (isNaN(year) || isNaN(month) || isNaN(day)) return '';
     
     const date = new Date(year, month - 1, day);
     if (isNaN(date.getTime())) return '';
@@ -362,7 +441,7 @@ interface ChapterListProps {
   styles: any;
   scrollViewRef: any;
   onScroll: (event: any) => void;
-  refreshControl?: React.ReactElement;
+  refreshControl?: React.ReactElement<any>;
   ListHeaderComponent?: React.ReactNode;
 }
 
@@ -398,8 +477,9 @@ const ChapterList: React.FC<ChapterListProps> = ({
     <ScrollView
       ref={scrollViewRef}
       style={styles.listContainer}
+      contentContainerStyle={{ paddingBottom: 80 }}
       onScroll={onScroll}
-      scrollEventThrottle={16}
+      scrollEventThrottle={100}
       onScrollBeginDrag={(e) => e.persist()}
       refreshControl={refreshControl}
     >
@@ -457,9 +537,21 @@ const ChapterList: React.FC<ChapterListProps> = ({
   );
 };
 
+// 使用 LRU 緩存限制大小，避免內存洩漏
 const imageCache = new Map<string, boolean>();
+const MAX_IMAGE_CACHE_SIZE = 100;
 
-const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMode, backgroundColor }) => {
+// 清理最舊的緩存項
+const cleanImageCache = () => {
+  if (imageCache.size > MAX_IMAGE_CACHE_SIZE) {
+    const firstKey = imageCache.keys().next().value;
+    if (firstKey) {
+      imageCache.delete(firstKey);
+    }
+  }
+};
+
+const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMode, backgroundColor, onImagePress }) => {
   const [isLoading, setIsLoading] = useState(!imageCache.get(src));
   const [error, setError] = useState(false);
   const screenWidth = Dimensions.get('window').width;
@@ -472,21 +564,20 @@ const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMod
   }, []);
 
   const cleanUrl = useMemo(() => {
-    if (src.startsWith('http')) {
-      return src;
-    }
-    return `${GITHUB_RAW_URL}${src}`;
+    return resolveImageUrl(src);
   }, [src]);
 
   useEffect(() => {
     if (!imageCache.has(cleanUrl)) {
       Image.prefetch(cleanUrl).then(() => {
         if (isMounted.current) {
+          cleanImageCache(); // 清理舊緩存
           imageCache.set(cleanUrl, true);
           setIsLoading(false);
         }
-      }).catch(() => {
+      }).catch((error) => {
         if (isMounted.current) {
+          logger.error('圖片預載失敗:', error);
           setError(true);
           setIsLoading(false);
         }
@@ -503,7 +594,7 @@ const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMod
     image: {
       width: screenWidth,
       height: screenWidth,
-      resizeMode: 'contain',
+      resizeMode: 'contain' as const,
       backgroundColor
     },
     loadingContainer: {
@@ -535,16 +626,21 @@ const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMod
 
   return (
     <View style={imageStyles.container}>
-      <Image
-        source={source}
-        style={imageStyles.image}
-        onError={() => {
-          if (isMounted.current) {
-            setError(true);
-            setIsLoading(false);
-          }
-        }}
-      />
+      <TouchableOpacity 
+        onPress={() => onImagePress?.(cleanUrl)}
+        activeOpacity={0.8}
+      >
+        <Image
+          source={source}
+          style={imageStyles.image}
+          onError={() => {
+            if (isMounted.current) {
+              setError(true);
+              setIsLoading(false);
+            }
+          }}
+        />
+      </TouchableOpacity>
       {isLoading && (
         <View style={imageStyles.loadingContainer}>
           <ActivityIndicator size="large" color={isDarkMode ? '#ffffff' : '#000000'} />
@@ -555,7 +651,8 @@ const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMod
 }, (prevProps, nextProps) => {
   return prevProps.src === nextProps.src && 
          prevProps.isDarkMode === nextProps.isDarkMode && 
-         prevProps.backgroundColor === nextProps.backgroundColor;
+         prevProps.backgroundColor === nextProps.backgroundColor &&
+         prevProps.onImagePress === nextProps.onImagePress;
 });
 
 // 格式化更新消息
@@ -585,25 +682,39 @@ const formatUpdateMessage = (updates: UpdateInfo[]): string => {
 };
 
 // 添加通知相關的類型定義
-interface NotificationData {
+interface NotificationData extends Record<string, unknown> {
   updates: UpdateInfo[];
 }
 
 // 設置通知頻道
 const setupNotifications = async (): Promise<void> => {
+  if (!isNotificationSupported) {
+    logger.warn('通知功能在 Expo Go 中不支持');
+    return;
+  }
+  
   if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('updates', {
-      name: '小說更新通知',
-      importance: Notifications.AndroidImportance.HIGH,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#FF231F7C',
-      description: '接收小說更新的通知',
-    });
+    try {
+      await Notifications.setNotificationChannelAsync('updates', {
+        name: '小說更新通知',
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#FF231F7C',
+        description: '接收小說更新的通知',
+      });
+    } catch (error) {
+      logger.error('設置通知頻道失敗:', error);
+    }
   }
 };
 
 // 發送通知的函數
 const sendUpdateNotification = async (updates: UpdateInfo[]): Promise<void> => {
+  if (!isNotificationSupported) {
+    logger.warn('通知功能在 Expo Go 中不支持');
+    return;
+  }
+  
   try {
     const notificationContent = formatUpdateMessage(updates);
     
@@ -624,6 +735,7 @@ const sendUpdateNotification = async (updates: UpdateInfo[]): Promise<void> => {
 };
 
 const App: React.FC = () => {
+  const insets = useSafeAreaInsets();
   const [novels, setNovels] = useState<Novel[]>([]);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [currentContent, setCurrentContent] = useState<string>('');
@@ -641,7 +753,6 @@ const App: React.FC = () => {
     fontSize: 18,
     lineHeight: 1.5,
     theme: 'light',
-    readingTime: {}  // 確保初始化為空對象
   });
   const [isAppReady, setIsAppReady] = useState(false);
   const [filteredNovels, setFilteredNovels] = useState<Novel[]>([]);
@@ -657,6 +768,11 @@ const App: React.FC = () => {
 
   const [readChapters, setReadChapters] = useState<Record<string, Set<string>>>({});
   const [updateChecking, setUpdateChecking] = useState<boolean>(false);
+  
+  // Lightbox 相關狀態
+  const [lightboxVisible, setLightboxVisible] = useState<boolean>(false);
+  const [lightboxImages, setLightboxImages] = useState<Array<{uri: string}>>([]);
+  const [lightboxIndex, setLightboxIndex] = useState<number>(0);
 
   const handleSearch = (text: string) => {
     if (!text) {
@@ -667,6 +783,19 @@ const App: React.FC = () => {
       novel.title.toLowerCase().includes(text.toLowerCase())
     );
     setFilteredNovels(filtered);
+  };
+
+  // Lightbox 處理函數
+  const openLightbox = (imageUri: string, index: number = 0) => {
+    setLightboxImages([{ uri: imageUri }]);
+    setLightboxIndex(index);
+    setLightboxVisible(true);
+  };
+
+  const closeLightbox = () => {
+    setLightboxVisible(false);
+    setLightboxImages([]);
+    setLightboxIndex(0);
   };
 
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress>({
@@ -684,7 +813,6 @@ const App: React.FC = () => {
         fontSize: newSettings.fontSize,
         lineHeight: newSettings.lineHeight,
         theme: newSettings.theme,
-        readingTime: newSettings.readingTime ?? {}  // 確保有默認值
       }));
     } catch (err) {
       logger.error('保存設置失敗:', err);
@@ -696,15 +824,7 @@ const App: React.FC = () => {
       const settingsStr = await AsyncStorage.getItem('reader_settings');
       if (settingsStr) {
         const parsedSettings: Settings = JSON.parse(settingsStr);
-        setSettings({
-          isDarkMode: parsedSettings.isDarkMode ?? false,
-          lastReadChapter: parsedSettings.lastReadChapter ?? {},
-          scrollPosition: parsedSettings.scrollPosition ?? {},
-          fontSize: parsedSettings.fontSize ?? DEFAULT_FONT_SIZE,
-          lineHeight: parsedSettings.lineHeight ?? DEFAULT_LINE_HEIGHT,
-          theme: parsedSettings.theme ?? 'light',
-          readingTime: parsedSettings.readingTime ?? {}
-        });
+        setSettings(parsedSettings);
         
         // 同時更新這兩個狀態
         setLastReadChapter(parsedSettings.lastReadChapter ?? {});
@@ -774,6 +894,22 @@ const App: React.FC = () => {
   useEffect(() => {
     StatusBar.setBackgroundColor(getStatusBarColor());
     StatusBar.setBarStyle(getStatusBarStyle());
+    
+    // 設置導航欄顏色和按鍵顏色
+    if (Platform.OS === 'android') {
+      const navigationBarColor = getBackgroundColor();
+      const isLight = settings.theme === 'light' || settings.theme === 'eyeComfort';
+      
+      // 嘗試多種方法設置導航欄
+      Promise.all([
+        // 方法1: 使用 expo-system-ui 設置導航欄背景
+        SystemUI.setBackgroundColorAsync(navigationBarColor).catch(() => {}),
+        // 方法2: 使用第三方庫設置導航欄和按鍵顏色
+        safeChangeNavigationBarColor(navigationBarColor, isLight, true)
+      ]).catch(() => {
+        logger.warn('無法設置導航欄顏色');
+      });
+    }
   }, [settings.theme]);
 
   const getStatusBarBackgroundColor = () => {
@@ -817,21 +953,29 @@ const App: React.FC = () => {
     try {
       setNovelsLoading(true);
       
-      // 檢查更新，只顯示對話框
-      const updateResult = await checkNovelUpdates();
-      if (updateResult?.hasUpdates) {
-        Alert.alert(
-          '發現更新',
-          formatUpdateMessage(updateResult.updates),
-          [{ text: '確定' }]
-        );
-      }
-      
-      // 1. 先嘗試從網路獲取數據
+      // 1. 先嘗試從網路獲取數據（添加 cache-busting）
       try {
-        const response = await fetch('https://raw.githubusercontent.com/xuerowo/myacg/main/輕小說翻譯/novels.json');
+        const timestamp = Date.now();
+        const response = await fetch(`https://raw.githubusercontent.com/xuerowo/myacgn/main/輕小說翻譯/novels.json?t=${timestamp}`, {
+          cache: 'no-cache',
+          headers: {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          }
+        });
         if (response.ok) {
           const data = await response.json();
+          
+          // 檢查更新，只顯示對話框
+          const updateResult = await checkNovelUpdates();
+          if (updateResult?.hasUpdates) {
+            Alert.alert(
+              '發現更新',
+              formatUpdateMessage(updateResult.updates),
+              [{ text: '確定' }]
+            );
+          }
           const novelList = data.novels
             .map((novel: Novel) => ({
               ...novel,
@@ -931,9 +1075,17 @@ const App: React.FC = () => {
         }
       }
 
-      // 1. 先嘗試從網路獲取最新的小說資料
+      // 1. 先嘗試從網路獲取最新的小說資料（添加 cache-busting）
       try {
-        const response = await fetch('https://raw.githubusercontent.com/xuerowo/myacg/main/輕小說翻譯/novels.json');
+        const timestamp = Date.now();
+        const response = await fetch(`https://raw.githubusercontent.com/xuerowo/myacgn/main/輕小說翻譯/novels.json?t=${timestamp}`, {
+          cache: 'no-cache',
+          headers: {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          }
+        });
         if (response.ok) {
           const data = await response.json();
           const novel = data.novels.find((n: Novel) => n.title === novelTitle);
@@ -1001,103 +1153,39 @@ const App: React.FC = () => {
       setContentLoading(true);
       setError(null);
 
-      // 先從章節記錄中檢查章節是否被標記為已修改
-      const chapterStatuses = await getChapterStatus(currentNovel);
-      const chapterInfo = chapterStatuses[chapter.title];
-      const isModified = chapterInfo?.statuses?.includes('modified');
-
-      // 獲取內容的key
-      const contentKey = `chapter_${currentNovel}_${chapter.title}`;
+      // 獲取內容的key (使用舊版格式保持兼容)
+      const contentKey = `content-${currentNovel}-${chapter.title}`;
       
-      // 獲取舊內容（如果存在）以便後續比較差異
-      const oldContent = await getLocalData(contentKey);
+      // 獲取本地緩存內容
+      const localContent = await getLocalData(contentKey);
       
-      // 無論是否有標記為修改，都從網路獲取最新內容
+      // 嘗試從網路獲取內容（添加 cache-busting）
       try {
-        const response = await fetch(chapter.url);
+        const resolvedChapterUrl = resolveChapterUrl(chapter.url);
+        const timestamp = Date.now();
+        const urlWithCacheBusting = `${resolvedChapterUrl}?t=${timestamp}`;
+        const response = await fetch(urlWithCacheBusting, {
+          cache: 'no-cache',
+          headers: {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          }
+        });
         if (!response.ok) {
           throw new Error(`下載章節失敗: ${response.status}`);
         }
         const newContent = await response.text();
         
-        // 如果沒有本地內容或內容有變化，則更新並提示
-        if (!oldContent || oldContent !== newContent) {
-          // 比較差異
-          let diffMessage = `《${currentNovel}》的「${chapter.title}」已顯示最新版本。`;
-          let hasChanges = false;
-          
-          if (oldContent) {
-            // 使用 diff 庫計算文本差異
-            const changes = diff.diffChars(oldContent, newContent);
-            
-            // 整理新增和刪除的內容
-            let addedText = '';
-            let removedText = '';
-            
-            changes.forEach(change => {
-              if (change.added) {
-                addedText += change.value;
-                hasChanges = true;
-              } else if (change.removed) {
-                removedText += change.value;
-                hasChanges = true;
-              }
-            });
-            
-            // 限制長度以防止對話框太大
-            const maxLength = 100;
-            const formatText = (text: string, max: number) => 
-              text.length > max ? text.substring(0, max) + '...' : text;
-            
-            // 更新差異信息
-            if (addedText || removedText) {
-              diffMessage = `《${currentNovel}》的「${chapter.title}」有內容更新，已顯示最新版本。\n\n${removedText ? '刪除: ' + formatText(removedText, maxLength) + '\n\n' : ''}${addedText ? '新增: ' + formatText(addedText, maxLength) : ''}`;
-            }
-          }
-          
-          // 刪除舊內容
-          await AsyncStorage.removeItem(contentKey);
-          
-          // 保存到本地緩存
-          await saveLocalData(contentKey, newContent);
-          setCurrentContent(newContent);
-          
-          // 只有當章節已標記為修改且內容確實有變化時才顯示提示
-          if (isModified && hasChanges) {
-            Alert.alert(
-              '章節內容已更新',
-              diffMessage,
-              [{ text: '確定' }]
-            );
-          }
-          
-          // 如果是被標記為已修改的章節，更新章節狀態，移除'modified'標記
-          if (isModified && chapterInfo) {
-            const updatedStatuses = chapterInfo.statuses.filter(status => status !== 'modified');
-            chapterStatuses[chapter.title] = {
-              ...chapterInfo,
-              statuses: updatedStatuses
-            };
-            
-            // 更新章節記錄
-            const chaptersData = await AsyncStorage.getItem('chapters_records');
-            const allChaptersRecord: ChapterRecord = chaptersData ? JSON.parse(chaptersData) : {};
-            if (!allChaptersRecord[currentNovel]) {
-              allChaptersRecord[currentNovel] = {};
-            }
-            allChaptersRecord[currentNovel] = chapterStatuses;
-            await AsyncStorage.setItem('chapters_records', JSON.stringify(allChaptersRecord));
-          }
-        } else {
-          // 內容沒有變化，但仍使用網路獲取的內容
-          setCurrentContent(newContent);
-        }
+        // 無需複雜的差異比較，直接保存新內容
+        await saveLocalData(contentKey, newContent);
+        setCurrentContent(newContent);
       } catch (networkError) {
         logger.error('從網路獲取章節失敗:', networkError);
         
         // 網路請求失敗時，如果有本地緩存則使用本地緩存
-        if (oldContent) {
-          setCurrentContent(oldContent);
+        if (localContent) {
+          setCurrentContent(localContent);
         } else {
           throw networkError; // 如果沒有本地緩存，則拋出錯誤
         }
@@ -1215,25 +1303,39 @@ const App: React.FC = () => {
     return currentIndex === chapters.length - 1;
   }, [chapters, currentNovel, lastReadChapter]);
 
-  const handleScroll = useCallback(
-    debounce((key: string, offset: number) => {
+  // 使用 useRef 來避免重新創建 debounce 函數
+  const debouncedScrollHandler = useRef(
+    debounce((key: string, offset: number, currentScrollPosition: any, currentSettings: any) => {
       if (!key.includes('undefined') && !key.includes('null')) {
         const newScrollPosition = {
-          ...scrollPosition,
+          ...currentScrollPosition,
           [key]: offset
         };
         setScrollPosition(newScrollPosition);
         
         // 同時更新 settings 中的 scrollPosition
         const newSettings = {
-          ...settings,
+          ...currentSettings,
           scrollPosition: newScrollPosition
         };
         setSettings(newSettings);
-        saveSettings(newSettings);
+        batchSaveLocalData('reader_settings', {
+          isDarkMode: newSettings.isDarkMode,
+          lastReadChapter: newSettings.lastReadChapter,
+          scrollPosition: newSettings.scrollPosition,
+          fontSize: newSettings.fontSize,
+          lineHeight: newSettings.lineHeight,
+          theme: newSettings.theme,
+        });
       }
-    }, 50),
-    [scrollPosition, settings]
+    }, 500)
+  ).current;
+
+  const handleScroll = useCallback(
+    (key: string, offset: number) => {
+      debouncedScrollHandler(key, offset, scrollPosition, settings);
+    },
+    [scrollPosition, settings, debouncedScrollHandler]
   );
 
   const handleCheckUpdate = async () => {
@@ -1310,7 +1412,8 @@ const App: React.FC = () => {
 
               for (const chapter of undownloadedChapters) {
                 try {
-                  const response = await fetch(chapter.url);
+                  const resolvedChapterUrl = resolveChapterUrl(chapter.url);
+                  const response = await fetch(resolvedChapterUrl);
                   
                   if (!response.ok) {
                     logger.error(`下載章節 ${chapter.title} 失敗: ${response.status}`);
@@ -1463,39 +1566,102 @@ const App: React.FC = () => {
     );
   };
 
-  const handleSettingsChange = (newFontSize: number, newLineHeight: number) => {
-    setSettings(prev => ({
-      ...prev,
-      fontSize: newFontSize,
-      lineHeight: newLineHeight
-    }));
-    saveSettings({
-      isDarkMode: settings.isDarkMode,
-      lastReadChapter: settings.lastReadChapter,
-      scrollPosition: settings.scrollPosition,
-      fontSize: newFontSize,
-      lineHeight: newLineHeight,
-      theme: settings.theme,
-      readingTime: settings.readingTime
-    });
-  };
+  // 防抖保存設定的 ref
+  const saveSettingsTimeoutRef = useRef<number | null>(null);
 
-  const handleResetSettings = () => {
-    setSettings(prev => ({
-      ...prev,
-      fontSize: DEFAULT_FONT_SIZE,
-      lineHeight: DEFAULT_LINE_HEIGHT
-    }));
-    saveSettings({
-      isDarkMode: settings.isDarkMode,
-      lastReadChapter: settings.lastReadChapter,
-      scrollPosition: settings.scrollPosition,
-      fontSize: DEFAULT_FONT_SIZE,
-      lineHeight: DEFAULT_LINE_HEIGHT,
-      theme: settings.theme,
-      readingTime: settings.readingTime
+  const handleFontSizeChange = useCallback((newFontSize: number) => {
+    setSettings(prev => {
+      const updatedSettings = {
+        ...prev,
+        fontSize: newFontSize
+      };
+      
+      // 清除之前的防抖計時器
+      if (saveSettingsTimeoutRef.current) {
+        clearTimeout(saveSettingsTimeoutRef.current);
+      }
+      
+      // 設定防抖保存，300ms 後執行
+      saveSettingsTimeoutRef.current = setTimeout(() => {
+        saveSettings(updatedSettings);
+      }, 300) as unknown as number;
+      
+      return updatedSettings;
     });
-  };
+  }, []);
+
+  const handleLineHeightChange = useCallback((newLineHeight: number) => {
+    setSettings(prev => {
+      const updatedSettings = {
+        ...prev,
+        lineHeight: newLineHeight
+      };
+      
+      // 清除之前的防抖計時器
+      if (saveSettingsTimeoutRef.current) {
+        clearTimeout(saveSettingsTimeoutRef.current);
+      }
+      
+      // 設定防抖保存，300ms 後執行
+      saveSettingsTimeoutRef.current = setTimeout(() => {
+        saveSettings(updatedSettings);
+      }, 300) as unknown as number;
+      
+      return updatedSettings;
+    });
+  }, []);
+
+  // 保留舊的函數以支援重置等操作
+  const handleSettingsChange = useCallback((newFontSize: number, newLineHeight: number) => {
+    setSettings(prev => {
+      const updatedSettings = {
+        ...prev,
+        fontSize: newFontSize,
+        lineHeight: newLineHeight
+      };
+      
+      // 清除之前的防抖計時器
+      if (saveSettingsTimeoutRef.current) {
+        clearTimeout(saveSettingsTimeoutRef.current);
+      }
+      
+      // 設定防抖保存，300ms 後執行
+      saveSettingsTimeoutRef.current = setTimeout(() => {
+        saveSettings(updatedSettings);
+      }, 300) as unknown as number;
+      
+      return updatedSettings;
+    });
+  }, []);
+
+  const handleResetSettings = useCallback(() => {
+    // 清除防抖計時器，立即保存重置設定
+    if (saveSettingsTimeoutRef.current) {
+      clearTimeout(saveSettingsTimeoutRef.current);
+    }
+    
+    setSettings(prev => {
+      const resetSettings = {
+        ...prev,
+        fontSize: DEFAULT_FONT_SIZE,
+        lineHeight: DEFAULT_LINE_HEIGHT
+      };
+      
+      // 重置設定立即保存，不使用防抖
+      saveSettings(resetSettings);
+      
+      return resetSettings;
+    });
+  }, []);
+
+  // 清理防抖計時器
+  useEffect(() => {
+    return () => {
+      if (saveSettingsTimeoutRef.current) {
+        clearTimeout(saveSettingsTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const [forceRefreshCovers, setForceRefreshCovers] = useState(false);
 
@@ -1578,91 +1744,16 @@ const App: React.FC = () => {
         return;
       }
 
-      // 無論是否有更新，都從網路重新獲取當前章節的內容
-      try {
-        const contentKey = `chapter_${currentNovel}_${chapter.title}`;
-        
-        // 直接從網路獲取
-        const response = await fetch(chapter.url);
-        if (!response.ok) {
-          throw new Error(`下載章節失敗: ${response.status}`);
-        }
-        const text = await response.text();
-        
-        // 判斷內容是否有變化
-        const localContent = await getLocalData(contentKey);
-        const hasChanges = text !== localContent;
-        
-        if (hasChanges && localContent) {
-          // 使用 diff 庫計算文本差異
-          const changes = diff.diffChars(localContent, text);
-          
-          // 整理新增和刪除的內容
-          let addedText = '';
-          let removedText = '';
-          
-          changes.forEach(change => {
-            if (change.added) {
-              addedText += change.value;
-            } else if (change.removed) {
-              removedText += change.value;
-            }
-          });
-          
-          // 限制長度以防止對話框太大
-          const maxLength = 100;
-          const formatText = (text: string, max: number) => 
-            text.length > max ? text.substring(0, max) + '...' : text;
-          
-          // 保存到本地緩存並更新顯示
-          await saveLocalData(contentKey, text);
-          setCurrentContent(text);
-          
-          // 如果章節有更新，清除 'modified' 標記
-          const chapterStatuses = await getChapterStatus(currentNovel);
-          const chapterInfo = chapterStatuses[chapter.title];
-          if (chapterInfo?.statuses?.includes('modified')) {
-            const updatedStatuses = chapterInfo.statuses.filter(status => status !== 'modified');
-            chapterStatuses[chapter.title] = {
-              ...chapterInfo,
-              statuses: updatedStatuses
-            };
-            
-            // 更新章節記錄
-            const chaptersData = await AsyncStorage.getItem('chapters_records');
-            const allChaptersRecord: ChapterRecord = chaptersData ? JSON.parse(chaptersData) : {};
-            if (!allChaptersRecord[currentNovel]) {
-              allChaptersRecord[currentNovel] = {};
-            }
-            allChaptersRecord[currentNovel] = chapterStatuses;
-            await AsyncStorage.setItem('chapters_records', JSON.stringify(allChaptersRecord));
-          }
-          
-          // 顯示詳細的變更信息
-          Alert.alert(
-            '內容已更新',
-            `章節內容已更新至最新版本\n\n${removedText ? '刪除: ' + formatText(removedText, maxLength) + '\n\n' : ''}${addedText ? '新增: ' + formatText(addedText, maxLength) : ''}`,
-            [{ 
-              text: '確定'
-            }]
-          );
-        } else {
-          // 保存到本地緩存並更新顯示
-          await saveLocalData(contentKey, text);
-          setCurrentContent(text);
-          
-          Alert.alert('刷新完成', '章節內容已是最新版本');
-        }
-      } catch (error) {
-        logger.error('刷新章節內容失敗:', error);
-        throw error;
-      }
+      // 直接重新獲取章節內容
+      await fetchChapterContent(chapter);
+      
     } catch (error) {
-      logger.error('刷新內容時出錯:', error);
+      logger.error('刷新內容失敗:', error);
+      setError(error instanceof Error ? error.message : '未知錯誤');
     } finally {
       setRefreshingContent(false);
     }
-  }, [currentNovel, lastReadChapter, chapters]);
+  }, [currentNovel, lastReadChapter, chapters, fetchChapterContent]);
 
   const [currentSort, setCurrentSort] = useState<SortOption>('lastUpdated');
 
@@ -1679,15 +1770,11 @@ const App: React.FC = () => {
           const aWordCount = a.totalWordCount || 0;
           const bWordCount = b.totalWordCount || 0;
           return bWordCount - aWordCount;
-        case 'readingTime':
-          const aReadingTime = settings.readingTime[a.title] || 0;
-          const bReadingTime = settings.readingTime[b.title] || 0;
-          return bReadingTime - aReadingTime;
         default:
           return 0;
       }
     });
-  }, [currentSort, settings.readingTime]);
+  }, [currentSort]);
 
   const sortedNovels = useMemo(() => sortNovels(novels), [novels, sortNovels]);
   const sortedFilteredNovels = useMemo(() => 
@@ -1747,170 +1834,6 @@ const App: React.FC = () => {
     }
   }, [currentNovel, lastReadChapter]);
 
-  const [readingStartTime, setReadingStartTime] = useState<number | null>(null);
-  const [currentReadingTime, setCurrentReadingTime] = useState<number>(0);
-  const [isReading, setIsReading] = useState(false);
-
-  // 開始計時
-  const startReadingTimer = useCallback(() => {
-    setReadingStartTime(Date.now());
-    setIsReading(true);
-  }, []);
-
-  // 停止計時並更新總閱讀時間
-  const stopReadingTimer = useCallback(() => {
-    if (readingStartTime && currentNovel) {
-      const endTime = Date.now();
-      const readingDuration = Math.floor((endTime - readingStartTime) / 1000); // 轉換為秒
-      
-      setSettings(prev => ({
-        ...prev,
-        readingTime: {
-          ...prev.readingTime,
-          [currentNovel]: (prev.readingTime[currentNovel] || 0) + readingDuration
-        }
-      }));
-      
-      // 保存到 AsyncStorage
-      saveSettings({
-        ...settings,
-        readingTime: {
-          ...settings.readingTime,
-          [currentNovel]: (settings.readingTime[currentNovel] || 0) + readingDuration
-        }
-      });
-      
-      setReadingStartTime(null);
-      setIsReading(false);
-    }
-  }, [readingStartTime, currentNovel, settings]);
-
-  // 更新當前閱讀時間的計時器
-  useEffect(() => {
-    let timer: NodeJS.Timeout | null = null;
-    
-    if (isReading && readingStartTime && currentNovel) {
-      timer = setInterval(() => {
-        const currentTime = Date.now();
-        const elapsedTime = Math.floor((currentTime - readingStartTime) / 1000);
-        const totalTime = (settings.readingTime[currentNovel] || 0) + elapsedTime;
-        setCurrentReadingTime(totalTime);
-      }, 1000);
-    } else if (currentNovel) {
-      setCurrentReadingTime(settings.readingTime[currentNovel] || 0);
-    }
-
-    return () => {
-      if (timer) {
-        clearInterval(timer);
-      }
-    };
-  }, [isReading, readingStartTime, currentNovel, settings.readingTime]);
-
-  // 在章節內容加載完成時開始計時
-  useEffect(() => {
-    if (currentContent) {
-      startReadingTimer();
-    } else {
-      stopReadingTimer();
-    }
-  }, [currentContent]);
-
-  // 在應用退出時停止計時
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', (nextAppState: string) => {
-      if (nextAppState === 'background' || nextAppState === 'inactive') {
-        stopReadingTimer();
-      } else if (nextAppState === 'active' && currentContent) {
-        startReadingTimer();
-      }
-    });
-
-    return () => {
-      subscription.remove();
-    };
-  }, [stopReadingTimer, startReadingTimer, currentContent]);
-
-  const formatReadingTime = (seconds: number): string => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const remainingSeconds = seconds % 60;
-    
-    const parts = [];
-    if (hours > 0) {
-      parts.push(`${hours}小時`);
-    }
-    if (minutes > 0 || hours > 0) {
-      parts.push(`${minutes}分鐘`);
-    }
-    parts.push(`${remainingSeconds}秒`);
-    
-    return parts.join('');
-  };
-
-  const ReadingTimeButton = () => (
-    <TouchableOpacity
-      style={styles.headerButton}
-      onPress={() => {
-        if (currentNovel) {
-          Alert.alert(
-            '閱讀時間統計',
-            `您已閱讀《${currentNovel}》共 ${formatReadingTime(currentReadingTime)}`,
-            [
-              {
-                text: '清除記錄',
-                style: 'destructive',
-                onPress: () => {
-                  Alert.alert(
-                    '確認清除',
-                    '確定要清除此小說的閱讀時間記錄嗎？',
-                    [
-                      {
-                        text: '取消',
-                        style: 'cancel'
-                      },
-                      {
-                        text: '確定',
-                        style: 'destructive',
-                        onPress: async () => {
-                          try {
-                            const newSettings = {
-                              ...settings,
-                              readingTime: {
-                                ...settings.readingTime,
-                                [currentNovel]: 0
-                              }
-                            };
-                            await saveSettings(newSettings);
-                            setSettings(newSettings);
-                            Alert.alert('成功', '已清除閱讀時間記錄');
-                          } catch (error) {
-                            logger.error('清除閱讀時間記錄失敗:', error);
-                            Alert.alert('錯誤', '清除閱讀時間記錄失敗');
-                          }
-                        }
-                      }
-                    ]
-                  );
-                }
-              },
-              { 
-                text: '確定',
-                style: 'cancel'
-              }
-            ]
-          );
-        }
-      }}
-    >
-      <MaterialIcons 
-        name="timer" 
-        size={24}
-        color={getTextColor()} 
-      />
-    </TouchableOpacity>
-  );
-
   const styles = useMemo(() => StyleSheet.create({
     container: {
       flex: 1,
@@ -1921,7 +1844,7 @@ const App: React.FC = () => {
     },
     contentContainer: {
       padding: 15,
-      paddingBottom: 60,
+      paddingBottom: insets.bottom > 0 ? insets.bottom + 40 : 60,
     },
     content: {
       fontSize: 18,
@@ -2008,7 +1931,7 @@ const App: React.FC = () => {
     },
     headerTitle: {
       fontSize: 20,
-      fontWeight: 'bold',
+      fontWeight: 'bold' as const,
       color: getTextColor(),
     },
     backButton: {
@@ -2018,10 +1941,7 @@ const App: React.FC = () => {
       alignItems: 'center',
       marginRight: 8,
     },
-    statusBarPlaceholder: {
-      height: STATUS_BAR_HEIGHT,
-      backgroundColor: getStatusBarBackgroundColor(),
-    },
+    // 移除 statusBarPlaceholder，因為已經使用 SafeAreaView
     loadingContainer: {
       paddingTop: '100%',
       top: 0,
@@ -2040,9 +1960,10 @@ const App: React.FC = () => {
     navigationBar: {
       flexDirection: 'row',
       justifyContent: 'space-between',
-      paddingBottom: 0,
+      paddingBottom: insets.bottom > 0 ? 0 : 8,
+      paddingTop: 8,
       paddingHorizontal: 10,
-      color: getTextColor(),
+      backgroundColor: getBackgroundColor(),
     },
     button: {
       padding: 10,
@@ -2089,7 +2010,7 @@ const App: React.FC = () => {
     badgeText: {
       color: '#ffffff',
       fontSize: 10,
-      fontWeight: 'bold',
+      fontWeight: 'bold' as const,
     },
     headerButton: {
       width: 40,
@@ -2108,7 +2029,7 @@ const App: React.FC = () => {
     },
     downloadProgress: {
       position: 'absolute',
-      top: STATUS_BAR_HEIGHT + 1,
+      top: insets.top + 1,
       left: 0,
       right: 0,
       flexDirection: 'row',
@@ -2123,10 +2044,10 @@ const App: React.FC = () => {
       marginRight: 8,
     },
     markdownImage: {
-      width: '100%',
+      width: '100%' as const,
       height: undefined,
       aspectRatio: 1,
-      resizeMode: 'contain',
+      resizeMode: 'contain' as const,
       backgroundColor: getBackgroundColor(),
       marginVertical: 10,
       marginHorizontal: -16, // 抵消 contentContainer 的 padding
@@ -2168,7 +2089,7 @@ const App: React.FC = () => {
     },
     novelTitle: {
       fontSize: 18,
-      fontWeight: 'bold',
+      fontWeight: 'bold' as const,
       marginBottom: 8,
     },
     novelAuthor: {
@@ -2213,7 +2134,192 @@ const App: React.FC = () => {
       fontSize: 14,
       color: '#2196F3',
     },
-  }), [settings.theme]);
+    chapterEndContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginVertical: 30,
+      marginHorizontal: -16,
+      paddingHorizontal: 16,
+    },
+    chapterEndDivider: {
+      flex: 1,
+      height: 1,
+      backgroundColor: settings.theme === 'dark' ? '#555555' : 
+                       settings.theme === 'eyeComfort' ? '#d4c4a8' : '#e0e0e0',
+    },
+    chapterEndText: {
+      fontSize: 14,
+      color: settings.theme === 'dark' ? '#888888' : 
+             settings.theme === 'eyeComfort' ? '#8a7a6a' : '#666666',
+      fontWeight: '500',
+      marginHorizontal: 16,
+      fontStyle: 'italic',
+    },
+  }), [settings.theme, getBackgroundColor, getTextColor, insets]);
+
+  // 預編譯的 Markdown 樣式，避免每次渲染都重新計算
+  const markdownStyles = useMemo(() => ({
+    body: {
+      ...styles.content,
+      fontSize: settings.fontSize,
+      lineHeight: settings.fontSize * settings.lineHeight,
+      color: getTextColor(),
+    },
+    strong: {
+      fontWeight: 'bold' as const,
+      color: getTextColor()
+    },
+    em: {
+      fontWeight: 'bold' as const,
+      color: getTextColor()
+    },
+    image: {
+      width: '100%' as const,
+      height: undefined,
+      aspectRatio: 1,
+      resizeMode: 'contain' as const,
+      marginVertical: 10,
+      marginHorizontal: -16,
+    },
+    heading1: {
+      fontSize: 22,
+      fontWeight: 'bold' as const,
+      color: getTextColor(),
+      lineHeight: 32,
+      includeFontPadding: false,
+      textAlignVertical: 'center' as const,
+      width: '100%' as const,
+      flexShrink: 0,
+    },
+    heading2: {
+      fontSize: 18,
+      fontWeight: 'bold' as const,
+      color: getTextColor(),
+      lineHeight: 26,
+      includeFontPadding: false,
+      textAlignVertical: 'center' as const,
+      width: '100%' as const,
+      flexShrink: 0,
+    },
+    heading3: {
+      fontSize: 16,
+      fontWeight: 'bold' as const,
+      color: getTextColor(),
+      lineHeight: 22,
+      includeFontPadding: false,
+      textAlignVertical: 'center' as const,
+      width: '100%' as const,
+      flexShrink: 0,
+    },
+  }), [settings.fontSize, settings.lineHeight, getTextColor, styles.content]);
+
+  // 預編譯的標題容器樣式
+  const headingContainerStyles = useMemo(() => ({
+    heading1Container: {
+      marginVertical: 16,
+      marginHorizontal: -16,
+      paddingHorizontal: 16,
+      paddingBottom: 8,
+      borderBottomWidth: 1,
+      borderBottomColor: getBackgroundColor() === '#ffffff' ? '#eeeeee' : '#333333',
+    },
+    heading2Container: {
+      marginVertical: 8,
+      marginHorizontal: -16,
+      paddingHorizontal: 16,
+    },
+    heading3Container: {
+      marginVertical: 6,
+      marginHorizontal: -16,
+      paddingHorizontal: 16,
+    },
+  }), [getBackgroundColor]);
+
+  // 優化的 Markdown 渲染規則
+  const markdownRules = useMemo(() => ({
+    image: (node: any, _children: any, _parent: any, _styles: any) => {
+      const { src } = node.attributes;
+      return <MarkdownImage 
+        key={node.key} 
+        src={src} 
+        isDarkMode={settings.theme === 'dark'} 
+        backgroundColor={getBackgroundColor()}
+        onImagePress={openLightbox}
+      />;
+    },
+    heading1: (node: any, children: any, _parent: any, _styles: any) => (
+      <View key={node.key} style={headingContainerStyles.heading1Container}>
+        <Text style={markdownStyles.heading1}>
+          {children}
+        </Text>
+      </View>
+    ),
+    heading2: (node: any, children: any, _parent: any, _styles: any) => (
+      <View key={node.key} style={headingContainerStyles.heading2Container}>
+        <Text style={markdownStyles.heading2}>
+          {children}
+        </Text>
+      </View>
+    ),
+    heading3: (node: any, children: any, _parent: any, _styles: any) => (
+      <View key={node.key} style={headingContainerStyles.heading3Container}>
+        <Text style={markdownStyles.heading3}>
+          {children}
+        </Text>
+      </View>
+    ),
+  }), [settings.theme, getBackgroundColor, markdownStyles, headingContainerStyles, openLightbox]);
+
+  // 渲染章節內容
+  const renderChapterContent = useCallback(() => {
+    return (
+      <ScrollView 
+        ref={contentScrollViewRef}
+        style={[
+          styles.contentContainer,
+          { 
+            backgroundColor: getBackgroundColor(),
+            paddingHorizontal: 16
+          }
+        ]}
+        onScroll={(event) => {
+          if (currentNovel && lastReadChapter[currentNovel]) {
+            handleScroll(
+              `${currentNovel}-${lastReadChapter[currentNovel]}`,
+              event.nativeEvent.contentOffset.y
+            );
+          }
+        }}
+        scrollEventThrottle={100}
+        onScrollBeginDrag={(e) => e.persist()}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshingContent}
+            onRefresh={onRefreshContent}
+            colors={[getTextColor()]}
+            tintColor={getTextColor()}
+          />
+        }
+      >
+        <Markdown 
+          style={markdownStyles as any}
+          mergeStyle={true}
+          rules={markdownRules}
+        >
+          {currentContent}
+        </Markdown>
+        
+        {/* 章節結束提示 */}
+        <View style={styles.chapterEndContainer}>
+          <View style={styles.chapterEndDivider} />
+          <Text style={styles.chapterEndText}>本話結束</Text>
+          <View style={styles.chapterEndDivider} />
+        </View>
+        
+        <View style={{ height: 10 }} />
+      </ScrollView>
+    );
+  }, [currentContent, markdownStyles, markdownRules, getBackgroundColor, getTextColor, handleScroll, refreshingContent, onRefreshContent, contentScrollViewRef, styles]);
 
   const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
 
@@ -2270,16 +2376,43 @@ const App: React.FC = () => {
       try {
         await loadSettings();
         
-        const { status: existingStatus } = await Notifications.getPermissionsAsync();
-        let finalStatus = existingStatus;
-        if (existingStatus !== 'granted') {
-          const { status } = await Notifications.requestPermissionsAsync();
-          finalStatus = status;
+        // 初始化導航欄顏色
+        if (Platform.OS === 'android') {
+          const theme = settings.theme || 'light';
+          const navigationBarColor = theme === 'dark' ? '#333333' : 
+                                   theme === 'eyeComfort' ? '#f9f1e6' : '#ffffff';
+          const isLight = theme === 'light' || theme === 'eyeComfort';
+          
+          // 嘗試多種方法設置導航欄
+          Promise.all([
+            // 方法1: 使用 expo-system-ui 設置導航欄背景
+            SystemUI.setBackgroundColorAsync(navigationBarColor).catch(() => {}),
+            // 方法2: 使用第三方庫設置導航欄和按鍵顏色
+            safeChangeNavigationBarColor(navigationBarColor, isLight, true)
+          ]).catch(() => {
+            logger.warn('無法設置導航欄顏色');
+          });
         }
         
-        if (finalStatus === 'granted') {
-          await setupNotifications();
-          await registerBackgroundFetch();
+        // 只在支持的環境中請求通知權限
+        if (isNotificationSupported) {
+          try {
+            const { status: existingStatus } = await Notifications.getPermissionsAsync();
+            let finalStatus = existingStatus;
+            if (existingStatus !== 'granted') {
+              const { status } = await Notifications.requestPermissionsAsync();
+              finalStatus = status;
+            }
+            
+            if (finalStatus === 'granted') {
+              await setupNotifications();
+              await registerBackgroundFetch();
+            }
+          } catch (error) {
+            logger.error('設置通知權限失敗:', error);
+          }
+        } else {
+          logger.warn('在 Expo Go 中跳過通知設置');
         }
         
         // 添加清理過期標記的調用
@@ -2308,9 +2441,12 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (Platform.OS === 'android') {
-      if (UIManager.setLayoutAnimationEnabledExperimental) {
+    // 在 New Architecture 中這個 API 已經不再需要
+    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+      try {
         UIManager.setLayoutAnimationEnabledExperimental(true);
+      } catch (error) {
+        // 在 New Architecture 中這是 no-op，忽略錯誤
       }
     }
   }, []);
@@ -2369,40 +2505,70 @@ const App: React.FC = () => {
       // 判斷應用是否在 Expo Go 中運行
       if (Constants.appOwnership === 'expo') {
         // 從 app.json 獲取版本號（在 Expo Go 中運行時）
-        currentVersion = '1.2.5'; // 硬編碼 app.json 中的版本號
+        currentVersion = '1.2.11'; // 硬編碼 app.json 中的版本號
       } else {
         // 已構建的應用使用原生應用版本
         currentVersion = Application.nativeApplicationVersion || '1.0.0';
       }
       
-      console.log('當前版本:', currentVersion);
+      logger.log('當前版本:', currentVersion);
       
       // 獲取遠程版本信息
-      const response = await fetch('https://raw.githubusercontent.com/xuerowo/myacg/main/輕小說翻譯/version.json');
+      const response = await fetch('https://raw.githubusercontent.com/xuerowo/myacgn/main/輕小說翻譯/version.json');
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       
-      const versionInfo = await response.json();
-      console.log('遠程版本:', versionInfo.version);
-      console.log('比較結果:', compareVersions(versionInfo.version, currentVersion));
+      const versionData = await response.json();
+      
+      // 從 history 陣列中取得最新版本資訊（第一個元素為最新）
+      const latestVersion = versionData.history[0];
+      
+      logger.log('遠程版本:', latestVersion.version);
+      logger.log('比較結果:', compareVersions(latestVersion.version, currentVersion));
       
       // 比較版本號來決定是否顯示更新提示
-      if (compareVersions(versionInfo.version, currentVersion) > 0) {
+      if (compareVersions(latestVersion.version, currentVersion) > 0) {
+        const buttons = [
+          { text: '稍後', style: 'cancel' as const },
+          { 
+            text: '立即更新', 
+            onPress: () => Linking.openURL(versionData.downloadUrl) 
+          }
+        ];
+        
+        // 如果有完整更新日誌URL，添加查看更新日誌按鈕
+        if (versionData.fullChangelogUrl) {
+          buttons.splice(1, 0, {
+            text: '查看更新日誌',
+            onPress: () => Linking.openURL(versionData.fullChangelogUrl)
+          });
+        }
+        
         Alert.alert(
           '發現新版本',
-          `新版本 ${versionInfo.version} 已發布\n\n${versionInfo.releaseNotes || ''}`,
-          [
-            { text: '稍後', style: 'cancel' },
-            { 
-              text: '立即更新', 
-              onPress: () => Linking.openURL(versionInfo.downloadUrl) 
-            }
-          ]
+          `新版本 ${latestVersion.version} 已發布\n發布日期：${latestVersion.date}\n\n${latestVersion.changes}`,
+          buttons
         );
       } else {
-        Alert.alert('沒有新版本', '您已經使用最新版本');
+        const buttons: any[] = [
+          { text: '確定', style: 'default' as const }
+        ];
+        
+        // 如果有完整更新日誌URL，添加查看更新日誌按鈕
+        if (versionData.fullChangelogUrl) {
+          buttons.splice(0, 0, {
+            text: '查看更新日誌',
+            onPress: () => Linking.openURL(versionData.fullChangelogUrl)
+          });
+        }
+        
+        Alert.alert(
+          '沒有新版本',
+          `您已經使用最新版本\n當前版本：${currentVersion}`,
+          buttons
+        );
       }
     } catch (error) {
       handleApiError(error, '檢查更新');
@@ -2426,9 +2592,9 @@ const App: React.FC = () => {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar 
-        translucent
         backgroundColor={getStatusBarColor()}
-        barStyle={getStatusBarStyle()} 
+        barStyle={getStatusBarStyle()}
+        translucent={false}
       />
       {novelsLoading || chaptersLoading || contentLoading ? (
         <View style={styles.loadingContainer}>
@@ -2443,7 +2609,6 @@ const App: React.FC = () => {
         </View>
       ) : currentContent ? (
         <View style={{ flex: 1 }}>
-          <View style={styles.statusBarPlaceholder} />
           <View style={styles.header}>
             <TouchableOpacity
               style={styles.backButton}
@@ -2466,116 +2631,15 @@ const App: React.FC = () => {
               />
             </TouchableOpacity>
           </View>
-          <ScrollView 
-            ref={contentScrollViewRef}
-            style={[
-              styles.contentContainer,
-              { 
-                backgroundColor: getBackgroundColor(),
-                paddingHorizontal: 16
-              }
-            ]}
-            onScroll={(event) => {
-              if (currentNovel && lastReadChapter[currentNovel]) {
-                handleScroll(
-                  `${currentNovel}-${lastReadChapter[currentNovel]}`,
-                  event.nativeEvent.contentOffset.y
-                );
-              }
-            }}
-            scrollEventThrottle={16}
-            onScrollBeginDrag={(e) => e.persist()}
-            onMomentumScrollEnd={(event) => {
-              // 在滾動停止時額外保存一次位置
-              if (currentNovel && lastReadChapter[currentNovel]) {
-                handleScroll(
-                  `${currentNovel}-${lastReadChapter[currentNovel]}`,
-                  event.nativeEvent.contentOffset.y
-                );
-              }
-            }}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshingContent}
-                onRefresh={onRefreshContent}
-                colors={[getTextColor()]}
-                tintColor={getTextColor()}
-              />
-            }
-          >
-            <Markdown 
-              style={{
-                body: {
-                  ...styles.content,
-                  fontSize: settings.fontSize,
-                  lineHeight: settings.fontSize * settings.lineHeight,
-                },
-                strong: {
-                  fontWeight: 'bold',
-                  color: getTextColor()
-                },
-                em: {
-                  fontWeight: 'bold',
-                  color: getTextColor()
-                },
-                image: {
-                  width: '100%',
-                  height: undefined,
-                  aspectRatio: 1,
-                  resizeMode: 'contain',
-                  marginVertical: 10,
-                  marginHorizontal: -16, // 抵消 contentContainer 的 padding
-                },
-                heading1: {
-                  fontSize: 22,
-                  fontWeight: 'bold',
-                  color: getTextColor(),
-                  marginVertical: 16,
-                  borderBottomWidth: 1,
-                  borderBottomColor: getBackgroundColor() === '#ffffff' ? '#eeeeee' : '#333333',
-                  paddingBottom: 8,
-                  lineHeight: Math.max(settings.lineHeight * 1.5, 2) * 22, // 確保標題有足夠的行高
-                },
-                heading2: {
-                  fontSize: 18,
-                  fontWeight: 'bold',
-                  color: getTextColor(),
-                  marginVertical: 8,
-                  lineHeight: Math.max(settings.lineHeight * 1.3, 1.8) * 18,
-                },
-                heading3: {
-                  fontSize: 16,
-                  fontWeight: 'bold',
-                  color: getTextColor(),
-                  marginVertical: 6,
-                  lineHeight: Math.max(settings.lineHeight * 1.2, 1.6) * 16,
-                },
-              }}
-              mergeStyle={true}
-              rules={{
-                image: (node, _children, _parent, _styles) => {
-                  const { src } = node.attributes;
-                  return <MarkdownImage 
-                    key={node.key} 
-                    src={src} 
-                    isDarkMode={settings.theme === 'dark'} 
-                    backgroundColor={getBackgroundColor()}
-                  />;
-                }
-              }}
-            >
-              {currentContent}
-            </Markdown>
-            <View style={{ height: 10 }} />
-          </ScrollView>
+          {renderChapterContent()}
           <ReadingSettings
             visible={settingsVisible}
             onClose={() => setSettingsVisible(false)}
             isDarkMode={settings.isDarkMode}
             fontSize={settings.fontSize}
             lineHeight={settings.lineHeight}
-            onFontSizeChange={(size) => handleSettingsChange(size, settings.lineHeight)}
-            onLineHeightChange={(height) => handleSettingsChange(settings.fontSize, height)}
+            onFontSizeChange={handleFontSizeChange}
+            onLineHeightChange={handleLineHeightChange}
             onReset={handleResetSettings} 
             theme={settings.theme}
             onThemeChange={handleThemeChange}
@@ -2609,7 +2673,6 @@ const App: React.FC = () => {
         </View>
       ) : chapters.length > 0 ? (
         <View style={{ flex: 1 }}>
-          <View style={styles.statusBarPlaceholder} />
           <View style={styles.header}>
             <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
               <TouchableOpacity
@@ -2647,7 +2710,6 @@ const App: React.FC = () => {
                   color={getTextColor()} 
                 />
               </TouchableOpacity>
-              <ReadingTimeButton />
             </View>
             {downloadProgress.isDownloading && (
               <View style={styles.downloadProgress}>
@@ -2665,11 +2727,23 @@ const App: React.FC = () => {
             ListHeaderComponent={
               <View style={styles.novelDetailContainer}>
                 <View style={styles.coverAndInfoContainer}>
-                  <Image
-                    source={{ uri: novels.find(n => n.title === currentNovel)?.cover }}
-                    style={styles.novelCover}
-                    resizeMode="cover"
-                  />
+                  <TouchableOpacity 
+                    onPress={() => {
+                      const coverUrl = resolveCoverUrl(novels.find(n => n.title === currentNovel)?.cover || '');
+                      const coverUrlWithTimestamp = `${coverUrl}?t=${Date.now()}`;
+                      openLightbox(coverUrlWithTimestamp);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Image
+                      source={{ 
+                        uri: `${resolveCoverUrl(novels.find(n => n.title === currentNovel)?.cover || '')}?t=${Date.now()}`,
+                        cache: 'reload'
+                      }}
+                      style={styles.novelCover}
+                      resizeMode="cover"
+                    />
+                  </TouchableOpacity>
                   <View style={styles.novelInfo}>
                     <Text style={[styles.novelTitle, { color: getTextColor() }]}>
                       {currentNovel}
@@ -2706,7 +2780,7 @@ const App: React.FC = () => {
                   </View>
                 </View>
                 <View>
-                  <View style={{ maxHeight: isDescriptionExpanded ? undefined : 100, overflow: 'hidden' }}>
+                  <View style={{ maxHeight: isDescriptionExpanded ? undefined : 120, overflow: 'hidden' }}>
                     <Markdown 
                       style={{
                         body: {
@@ -2714,7 +2788,7 @@ const App: React.FC = () => {
                           color: getTextColor(),
                         },
                         strong: {
-                          fontWeight: 'bold',
+                          fontWeight: 'bold' as const,
                           color: getTextColor()
                         },
                         em: {
@@ -2723,24 +2797,27 @@ const App: React.FC = () => {
                         },
                         heading1: {
                           fontSize: 18,
-                          fontWeight: 'bold',
+                          fontWeight: 'bold' as const,
                           color: getTextColor(),
                           marginVertical: 8,
-                          lineHeight: Math.max(settings.lineHeight * 1.5, 2) * 18, // 確保標題有足夠的行高
+                          width: '100%' as const, // 確保標題佔滿可用寬度
+                          lineHeight: 26, // 固定行高確保標題完整顯示
                         },
                         heading2: {
                           fontSize: 16,
-                          fontWeight: 'bold',
+                          fontWeight: 'bold' as const,
                           color: getTextColor(),
                           marginVertical: 6,
-                          lineHeight: Math.max(settings.lineHeight * 1.3, 1.8) * 16,
+                          width: '100%' as const, // 確保標題佔滿可用寬度
+                          lineHeight: 22, // 固定行高確保標題完整顯示
                         },
                         heading3: {
                           fontSize: 15,
-                          fontWeight: 'bold',
+                          fontWeight: 'bold' as const,
                           color: getTextColor(),
                           marginVertical: 4,
-                          lineHeight: Math.max(settings.lineHeight * 1.2, 1.6) * 15,
+                          width: '100%' as const, // 確保標題佔滿可用寬度
+                          lineHeight: 20, // 固定行高確保標題完整顯示
                         },
                         paragraph: {
                           marginVertical: 4,
@@ -2789,7 +2866,6 @@ const App: React.FC = () => {
         </View>
      ) : (
       <View style={{ flex: 1 }}>
-        <View style={styles.statusBarPlaceholder} />
         <View style={styles.header}>
           <Text style={styles.headerTitle}>輕小說</Text>
           <View style={styles.headerRight}>
@@ -2824,6 +2900,7 @@ const App: React.FC = () => {
           onSelectNovel={(novel) => fetchChapterList(novel.title)}
           isLoading={novelsLoading}
           isDarkMode={settings.theme === 'dark'}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}
           refreshControl={
             <RefreshControl
               refreshing={refreshingNovels}
@@ -2836,8 +2913,70 @@ const App: React.FC = () => {
         />
       </View>
       )}
+      
+      {/* Lightbox 元件 */}
+      <Modal
+        visible={lightboxVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={closeLightbox}
+      >
+        <View style={{ 
+          flex: 1, 
+          backgroundColor: '#000000',
+          justifyContent: 'center',
+          alignItems: 'center'
+        }}>
+          <Pressable
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 1
+            }}
+            onPress={closeLightbox}
+          />
+          {lightboxImages.length > 0 && (
+            <ScrollView
+              style={{
+                width: '100%',
+                height: '100%',
+                zIndex: 2
+              }}
+              contentContainerStyle={{
+                flex: 1,
+                justifyContent: 'center',
+                alignItems: 'center'
+              }}
+              maximumZoomScale={3}
+              minimumZoomScale={1}
+              showsHorizontalScrollIndicator={false}
+              showsVerticalScrollIndicator={false}
+            >
+              <ExpoImage
+                source={{ uri: lightboxImages[lightboxIndex]?.uri }}
+                style={{
+                  width: Dimensions.get('window').width,
+                  height: Dimensions.get('window').height
+                }}
+                contentFit="contain"
+              />
+            </ScrollView>
+          )}
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
 
-export default App;
+const AppWrapper: React.FC = () => {
+  return (
+    <SafeAreaProvider>
+      <App />
+    </SafeAreaProvider>
+  );
+};
+
+export default AppWrapper;

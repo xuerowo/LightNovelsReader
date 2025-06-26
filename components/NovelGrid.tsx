@@ -10,8 +10,9 @@ interface NovelGridProps {
   isDarkMode?: boolean;
   onScroll?: (event: any) => void;
   contentContainerStyle?: any;
-  refreshControl?: React.ReactElement;
+  refreshControl?: React.ReactElement<any>;
   forceRefreshCovers?: boolean;
+  onImagePress?: (imageUri: string) => void;
 }
 
 const NovelGrid: React.FC<NovelGridProps> = ({
@@ -22,7 +23,8 @@ const NovelGrid: React.FC<NovelGridProps> = ({
   onScroll,
   contentContainerStyle,
   refreshControl,
-  forceRefreshCovers = false
+  forceRefreshCovers = false,
+  onImagePress
 }) => {
   if (isLoading) {
     return (
@@ -56,7 +58,7 @@ const NovelGrid: React.FC<NovelGridProps> = ({
         ...contentContainerStyle,
       }}
       onScroll={onScroll}
-      scrollEventThrottle={16}
+      scrollEventThrottle={100}
       refreshControl={refreshControl}
     >
       {novels.map((novel) => (
@@ -65,7 +67,8 @@ const NovelGrid: React.FC<NovelGridProps> = ({
           novel={novel}
           onPress={onSelectNovel}
           isDarkMode={isDarkMode}
-          forceRefresh={forceRefreshCovers} 
+          forceRefresh={forceRefreshCovers}
+          onImagePress={onImagePress}
         />
       ))}
     </ScrollView>

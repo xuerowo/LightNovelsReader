@@ -11,7 +11,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import SortIcon from './SortIcon';
 
-export type SortOption = 'lastUpdated' | 'chapterCount' | 'wordCount' | 'readingTime';
+export type SortOption = 'lastUpdated' | 'chapterCount' | 'wordCount';
 
 interface SortSelectorProps {
   currentSort: SortOption;
@@ -23,7 +23,6 @@ const options: { value: SortOption; label: string }[] = [
   { value: 'lastUpdated', label: '最新更新' },
   { value: 'chapterCount', label: '章節數' },
   { value: 'wordCount', label: '文字數' },
-  { value: 'readingTime', label: '閱讀時間' },
 ];
 
 const SortSelector: React.FC<SortSelectorProps> = ({ currentSort, onSortChange, isDarkMode = false }) => {
