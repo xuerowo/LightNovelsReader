@@ -10,7 +10,7 @@ import {
   StatusBar,
   BackHandler,
   Alert,
-  Animated,
+  Animated as RNAnimated,
   Platform,
   UIManager,
   TextStyle,
@@ -45,6 +45,216 @@ import { Novel, Chapter } from './types/novelTypes';
 import * as diff from 'diff';
 import logger from './utils/logger';
 import { resolveChapterUrl, resolveImageUrl, resolveCoverUrl } from './utils/pathUtils';
+import { 
+  PinchGestureHandler, 
+  PanGestureHandler, 
+  State, 
+  GestureHandlerRootView, 
+  gestureHandlerRootHOC,
+  TapGestureHandler
+} from 'react-native-gesture-handler';
+
+// 修復焦點縮放的雙指縮放和單指平移燈箱組件
+const LightboxImageViewer: React.FC<{ imageUri: string }> = ({ imageUri }) => {
+  const screenWidth = Dimensions.get('window').width;
+  const screenHeight = Dimensions.get('window').height;
+  const imageWidth = screenWidth * 0.9;
+  const imageHeight = screenHeight * 0.9;
+  
+  // 狀態管理 - 分離基礎狀態和手勢狀態
+  const baseScale = useRef(new RNAnimated.Value(1)).current;
+  const gestureScale = useRef(new RNAnimated.Value(1)).current;
+  const translateX = useRef(new RNAnimated.Value(0)).current;
+  const translateY = useRef(new RNAnimated.Value(0)).current;
+  const panX = useRef(new RNAnimated.Value(0)).current;
+  const panY = useRef(new RNAnimated.Value(0)).current;
+  
+  // 狀態追蹤變數
+  const lastScale = useRef(1);
+  const lastTranslateX = useRef(0);
+  const lastTranslateY = useRef(0);
+  
+  // 圖片在螢幕上的中心位置
+  const imageCenterX = screenWidth / 2;
+  const imageCenterY = screenHeight / 2;
+  
+  // 邊界計算
+  const clampTranslate = (x: number, y: number, currentScale: number) => {
+    const scaledWidth = imageWidth * currentScale;
+    const scaledHeight = imageHeight * currentScale;
+    const maxX = Math.max(0, (scaledWidth - imageWidth) / 2);
+    const maxY = Math.max(0, (scaledHeight - imageHeight) / 2);
+    
+    return {
+      x: Math.max(-maxX, Math.min(maxX, x)),
+      y: Math.max(-maxY, Math.min(maxY, y))
+    };
+  };
+
+  // 縮放手勢事件處理 - 分離手勢縮放，避免自動綁定衝突
+  const onPinchGestureEvent = RNAnimated.event(
+    [], // 移除自動綁定，避免狀態衝突
+    { 
+      useNativeDriver: false,
+      listener: (event: any) => {
+        const { scale: currentGestureScale, focalX, focalY } = event.nativeEvent;
+        
+        // 計算觸摸點相對於圖片中心的偏移
+        const focalOffsetX = focalX - imageCenterX;
+        const focalOffsetY = focalY - imageCenterY;
+        
+        // 計算新的總縮放值
+        const newTotalScale = lastScale.current * currentGestureScale;
+        
+        // 使用正確的變換公式：新位置 = 原位置 + 焦點偏移 * (1 - 縮放比例)
+        const newTranslateX = lastTranslateX.current + focalOffsetX * (1 - currentGestureScale);
+        const newTranslateY = lastTranslateY.current + focalOffsetY * (1 - currentGestureScale);
+        
+        // 應用邊界限制
+        const clamped = clampTranslate(newTranslateX, newTranslateY, newTotalScale);
+        
+        // 手動更新 Animated 值
+        gestureScale.setValue(currentGestureScale);
+        translateX.setValue(clamped.x);
+        translateY.setValue(clamped.y);
+        
+        console.log('Pinch gesture:', {
+          currentGestureScale,
+          focalX, focalY,
+          focalOffsetX, focalOffsetY,
+          newTotalScale,
+          newTranslateX, newTranslateY,
+          clampedX: clamped.x, clampedY: clamped.y
+        });
+      }
+    }
+  );
+
+  const onPinchHandlerStateChange = (event: any) => {
+    if (event.nativeEvent.oldState === State.ACTIVE) {
+      // 縮放結束，合併狀態到基礎值
+      const { scale: finalGestureScale, focalX, focalY } = event.nativeEvent;
+      
+      const newBaseScale = lastScale.current * finalGestureScale;
+      const focalOffsetX = focalX - imageCenterX;
+      const focalOffsetY = focalY - imageCenterY;
+      const finalTranslateX = lastTranslateX.current + focalOffsetX * (1 - finalGestureScale);
+      const finalTranslateY = lastTranslateY.current + focalOffsetY * (1 - finalGestureScale);
+      
+      const clamped = clampTranslate(finalTranslateX, finalTranslateY, newBaseScale);
+      
+      // 更新狀態追蹤
+      lastScale.current = newBaseScale;
+      lastTranslateX.current = clamped.x;
+      lastTranslateY.current = clamped.y;
+      
+      // 將手勢狀態合併到基礎狀態，並重置手勢
+      baseScale.setValue(newBaseScale);
+      gestureScale.setValue(1); // 重置手勢縮放
+      translateX.setValue(clamped.x);
+      translateY.setValue(clamped.y);
+      
+      console.log('Pinch ended, final state:', {
+        newBaseScale,
+        finalTranslateX: clamped.x,
+        finalTranslateY: clamped.y
+      });
+    }
+  };
+
+  // 平移手勢事件處理
+  const onPanGestureEvent = RNAnimated.event(
+    [{ nativeEvent: { translationX: panX, translationY: panY } }],
+    { 
+      useNativeDriver: false,
+      listener: (event: any) => {
+        console.log('Pan event:', event.nativeEvent.translationX, event.nativeEvent.translationY, 'Scale:', lastScale.current);
+      }
+    }
+  );
+
+  const onPanHandlerStateChange = (event: any) => {
+    if (event.nativeEvent.oldState === State.ACTIVE) {
+      // 平移結束，更新基礎位置
+      const newTranslateX = lastTranslateX.current + event.nativeEvent.translationX;
+      const newTranslateY = lastTranslateY.current + event.nativeEvent.translationY;
+      
+      // 應用邊界限制
+      const clamped = clampTranslate(newTranslateX, newTranslateY, lastScale.current);
+      lastTranslateX.current = clamped.x;
+      lastTranslateY.current = clamped.y;
+      
+      console.log('Pan ended, new position:', clamped.x, clamped.y);
+      
+      // 更新基礎位置並重置平移手勢
+      translateX.setValue(clamped.x);
+      translateY.setValue(clamped.y);
+      panX.setValue(0);
+      panY.setValue(0);
+    }
+  };
+
+
+  const pinchRef = useRef(null);
+  const panRef = useRef(null);
+
+  return (
+    <View style={{ 
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center'
+    }}>
+      <PanGestureHandler
+        ref={panRef}
+        onGestureEvent={onPanGestureEvent}
+        onHandlerStateChange={onPanHandlerStateChange}
+        minPointers={1}
+        maxPointers={1}
+        simultaneousHandlers={[pinchRef]}
+        enabled={true}
+        shouldCancelWhenOutside={false}
+      >
+        <RNAnimated.View>
+          <PinchGestureHandler
+            ref={pinchRef}
+            onGestureEvent={onPinchGestureEvent}
+            onHandlerStateChange={onPinchHandlerStateChange}
+            simultaneousHandlers={[panRef]}
+          >
+            <RNAnimated.View 
+              style={{
+                transform: [
+                  { 
+                    translateX: RNAnimated.add(translateX, panX)
+                  },
+                  { 
+                    translateY: RNAnimated.add(translateY, panY)
+                  },
+                  { 
+                    scale: RNAnimated.multiply(baseScale, gestureScale)
+                  }
+                ]
+              }}
+            >
+              <ExpoImage
+                source={{ uri: imageUri }}
+                style={{
+                  width: imageWidth,
+                  height: imageHeight
+                }}
+                contentFit="contain"
+                contentPosition="center"
+              />
+            </RNAnimated.View>
+          </PinchGestureHandler>
+        </RNAnimated.View>
+      </PanGestureHandler>
+    </View>
+  );
+};
+
+// 使用 gestureHandlerRootHOC 包裝組件以支援 Android Modal 中的手勢處理
+const LightboxImageViewerWithHOC = gestureHandlerRootHOC(LightboxImageViewer);
 
 // 安全的導航欄顏色函數
 const safeChangeNavigationBarColor = (color: string, isLight: boolean, animated: boolean) => {
@@ -766,7 +976,6 @@ const App: React.FC = () => {
   const [refreshingNovels, setRefreshingNovels] = useState(false);
   const [refreshingChapters, setRefreshingChapters] = useState(false);
   const [refreshingContent, setRefreshingContent] = useState(false);
-  const spinValue = useRef(new Animated.Value(0)).current;
 
   const contentScrollViewRef = useRef<ScrollView>(null);
   const chaptersScrollViewRef = useRef<ScrollView>(null);
@@ -3001,38 +3210,7 @@ const App: React.FC = () => {
           </Pressable>
           
           {lightboxImages.length > 0 && (
-            <ScrollView
-              style={{
-                flex: 1
-              }}
-              contentContainerStyle={{
-                flex: 1,
-                justifyContent: 'center',
-                alignItems: 'center'
-              }}
-              maximumZoomScale={3}
-              minimumZoomScale={1}
-              pinchGestureEnabled={true}
-              scrollEnabled={true}
-              bouncesZoom={true}
-              bounces={false}
-              directionalLockEnabled={true}
-              showsHorizontalScrollIndicator={false}
-              showsVerticalScrollIndicator={false}
-              centerContent={true}
-              alwaysBounceVertical={false}
-              alwaysBounceHorizontal={false}
-            >
-              <ExpoImage
-                source={{ uri: lightboxImages[lightboxIndex]?.uri }}
-                style={{
-                  width: Dimensions.get('window').width,
-                  height: Dimensions.get('window').height
-                }}
-                contentFit="contain"
-                contentPosition="center"
-              />
-            </ScrollView>
+            <LightboxImageViewerWithHOC imageUri={lightboxImages[lightboxIndex]?.uri} />
           )}
         </View>
       </Modal>
@@ -3043,7 +3221,9 @@ const App: React.FC = () => {
 const AppWrapper: React.FC = () => {
   return (
     <SafeAreaProvider>
-      <App />
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <App />
+      </GestureHandlerRootView>
     </SafeAreaProvider>
   );
 };

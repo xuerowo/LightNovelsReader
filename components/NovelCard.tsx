@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, Image, StyleSheet } from 'react-native';
-import { Novel, Chapter } from '../types/novelTypes';
+import { Novel } from '../types/novelTypes';
 import { resolveCoverUrl } from '../utils/pathUtils';
 
 interface NovelCardProps {

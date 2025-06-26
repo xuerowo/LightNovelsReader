@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@expo/vector-icons": "^14.1.0",
+    "@likashefqet/react-native-image-zoom": "^4.3.0",
     "@react-native-async-storage/async-storage": "2.1.2",
     "@react-native-community/slider": "4.5.6",
     "@react-navigation/native": "^7.0.17",
@@ -31,7 +32,8 @@
     "react-native-markdown-display": "^7.0.2",
     "react-native-navigation-bar-color": "^2.0.2",
     "react-native-safe-area-context": "5.4.0",
-    "react-native-svg": "15.11.2"
+    "react-native-svg": "15.11.2",
+    "react-native-reanimated": "~3.17.4"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
@@ -45,9 +47,9 @@
     "@types/lodash.debounce": "^4.0.9",
     "@types/react": "~19.0.10",
     "babel-plugin-transform-remove-console": "^6.9.4",
-    "typescript": "~5.8.3",
     "eslint": "^9.0.0",
-    "eslint-config-expo": "~9.2.0"
+    "eslint-config-expo": "~9.2.0",
+    "typescript": "~5.8.3"
   },
   "expo": {
     "doctor": {

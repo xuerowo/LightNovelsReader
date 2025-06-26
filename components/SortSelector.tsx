@@ -33,7 +33,6 @@ const SortSelector: React.FC<SortSelectorProps> = ({ currentSort, onSortChange, 
   const currentLabel = options.find(opt => opt.value === currentSort)?.label;
   const textColor = isDarkMode ? '#fff' : '#000';
   const backgroundColor = isDarkMode ? '#333' : '#fff';
-  const overlayColor = isDarkMode ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)';
   const selectedColor = isDarkMode ? '#404040' : '#f0f0f0';
 
   return (

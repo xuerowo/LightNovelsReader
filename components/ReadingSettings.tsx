@@ -224,6 +224,8 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
   );
 });
 
+ReadingSettings.displayName = 'ReadingSettings';
+
 const styles = StyleSheet.create({
   overlay: {
     ...StyleSheet.absoluteFillObject,

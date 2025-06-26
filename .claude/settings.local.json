@@ -30,7 +30,11 @@
       "Bash(npm config:*)",
       "Bash(ln:*)",
       "Bash(timeout 10 npm start)",
-      "WebFetch(domain:stackoverflow.com)"
+      "WebFetch(domain:stackoverflow.com)",
+      "Bash(timeout 15 npm start 2 >& 1)",
+      "Bash(npm audit:*)",
+      "Bash(npm ls:*)",
+      "WebFetch(domain:docs.swmansion.com)"
     ],
     "deny": []
   }

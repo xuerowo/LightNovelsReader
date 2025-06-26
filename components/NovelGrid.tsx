@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, ScrollView, ActivityIndicator } from 'react-native';
 import NovelCard from './NovelCard';
-import { Novel, Chapter } from '../types/novelTypes';
+import { Novel } from '../types/novelTypes';
 
 interface NovelGridProps {
   novels: Novel[];
