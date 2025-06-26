@@ -400,6 +400,7 @@ const formatChapterDateTime = (dateStr: string) => {
     if (isNaN(date.getTime())) return '';
     
     const now = new Date();
+    // 使用當前時區的日期比較，保持用戶體驗的一致性
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const compareDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
     const diffTime = today.getTime() - compareDate.getTime();
@@ -443,6 +444,7 @@ interface ChapterListProps {
   onScroll: (event: any) => void;
   refreshControl?: React.ReactElement<any>;
   ListHeaderComponent?: React.ReactNode;
+  theme?: string;
 }
 
 const ChapterList: React.FC<ChapterListProps> = ({ 
@@ -456,6 +458,7 @@ const ChapterList: React.FC<ChapterListProps> = ({
   onScroll,
   refreshControl, 
   ListHeaderComponent,
+  theme = 'light',
 }) => {
   const [chapterStatuses, setChapterStatuses] = useState<Record<string, ChapterInfo>>({});
   
@@ -481,6 +484,9 @@ const ChapterList: React.FC<ChapterListProps> = ({
       onScroll={onScroll}
       scrollEventThrottle={100}
       onScrollBeginDrag={(e) => e.persist()}
+      showsVerticalScrollIndicator={true}
+      showsHorizontalScrollIndicator={false}
+      indicatorStyle={theme === 'dark' ? 'white' : 'black'}
       refreshControl={refreshControl}
     >
       {ListHeaderComponent}
@@ -985,8 +991,8 @@ const App: React.FC = () => {
               if (a.lastUpdated === '未知時間') return 1;
               if (b.lastUpdated === '未知時間') return -1;
               
-              const dateA = new Date(a.lastUpdated.replace(' ', 'T') + '+08:00');
-              const dateB = new Date(b.lastUpdated.replace(' ', 'T') + '+08:00');
+              const dateA = new Date(a.lastUpdated.replace(' ', 'T'));
+              const dateB = new Date(b.lastUpdated.replace(' ', 'T'));
               
               return dateB.getTime() - dateA.getTime();
             });
@@ -2292,6 +2298,9 @@ const App: React.FC = () => {
         }}
         scrollEventThrottle={100}
         onScrollBeginDrag={(e) => e.persist()}
+        showsVerticalScrollIndicator={true}
+        showsHorizontalScrollIndicator={false}
+        indicatorStyle={settings.theme === 'dark' ? 'white' : 'black'}
         refreshControl={
           <RefreshControl
             refreshing={refreshingContent}
@@ -2326,19 +2335,25 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadInitialData = async () => {
       try {
-        // 嘗試從本地加載數據
-        const localNovels = await getLocalData('novels');
-        if (localNovels && Array.isArray(localNovels) && localNovels.length > 0) {
-          setNovels(localNovels);
-          setFilteredNovels(localNovels);
-        }
-        
-        // 如果本地沒有數據，則從網絡加載
-        if (!localNovels || !Array.isArray(localNovels) || localNovels.length === 0) {
+        // 優先從網路載入最新數據
+        try {
           await fetchNovelList();
+        } catch (networkError) {
+          logger.error('網路載入失敗，嘗試使用本地數據:', networkError);
+          
+          // 網路載入失敗時才使用本地數據
+          const localNovels = await getLocalData('novels');
+          if (localNovels && Array.isArray(localNovels) && localNovels.length > 0) {
+            setNovels(localNovels);
+            setFilteredNovels(localNovels);
+          } else {
+            // 如果連本地數據都沒有，顯示錯誤
+            setError('無法載入小說數據，請檢查網路連接');
+          }
         }
       } catch (error) {
-        logger.error(error);
+        logger.error('初始化載入失敗:', error);
+        setError('初始化失敗，請重新啟動應用程式');
       } finally {
         setIsAppReady(true);
       }
@@ -2450,6 +2465,43 @@ const App: React.FC = () => {
       }
     }
   }, []);
+
+  // AppState 監聽邏輯 - 監聽應用程式從背景回到前景
+  useEffect(() => {
+    let lastActiveTime = Date.now();
+    const REFRESH_INTERVAL = 5 * 60 * 1000; // 5分鐘
+    
+    const handleAppStateChange = async (nextAppState: string) => {
+      if (nextAppState === 'active') {
+        const now = Date.now();
+        
+        // 如果距離上次活躍時間超過設定間隔，則刷新數據
+        if (now - lastActiveTime > REFRESH_INTERVAL) {
+          logger.log('應用程式回到前景，刷新數據');
+          
+          try {
+            // 優先刷新小說列表
+            await fetchNovelList();
+            
+            // 如果當前有選中的小說，也刷新章節列表
+            if (currentNovel) {
+              await fetchChapterList(currentNovel);
+            }
+          } catch (error) {
+            logger.error('回到前景時刷新數據失敗:', error);
+          }
+        }
+        
+        lastActiveTime = now;
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    
+    return () => {
+      subscription?.remove();
+    };
+  }, [currentNovel]);
 
   useEffect(() => {
     setFilteredNovels(novels);
@@ -2862,6 +2914,7 @@ const App: React.FC = () => {
                 tintColor={getTextColor()}
               />
             }
+            theme={settings.theme}
           />
         </View>
      ) : (
@@ -2900,6 +2953,7 @@ const App: React.FC = () => {
           onSelectNovel={(novel) => fetchChapterList(novel.title)}
           isLoading={novelsLoading}
           isDarkMode={settings.theme === 'dark'}
+          theme={settings.theme}
           contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}
           refreshControl={
             <RefreshControl

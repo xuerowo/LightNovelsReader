@@ -13,6 +13,7 @@ interface NovelGridProps {
   refreshControl?: React.ReactElement<any>;
   forceRefreshCovers?: boolean;
   onImagePress?: (imageUri: string) => void;
+  theme?: string;
 }
 
 const NovelGrid: React.FC<NovelGridProps> = ({
@@ -24,7 +25,8 @@ const NovelGrid: React.FC<NovelGridProps> = ({
   contentContainerStyle,
   refreshControl,
   forceRefreshCovers = false,
-  onImagePress
+  onImagePress,
+  theme = 'light'
 }) => {
   if (isLoading) {
     return (
@@ -59,6 +61,9 @@ const NovelGrid: React.FC<NovelGridProps> = ({
       }}
       onScroll={onScroll}
       scrollEventThrottle={100}
+      showsVerticalScrollIndicator={true}
+      showsHorizontalScrollIndicator={false}
+      indicatorStyle={theme === 'dark' ? 'white' : 'black'}
       refreshControl={refreshControl}
     >
       {novels.map((novel) => (

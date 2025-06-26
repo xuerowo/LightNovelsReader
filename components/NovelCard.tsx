@@ -14,7 +14,7 @@ interface NovelCardProps {
 const formatDateTime = (dateStr: string) => {
   if (dateStr === '未知時間') return dateStr;
   
-  const date = new Date(dateStr.replace(' ', 'T') + '+08:00');
+  const date = new Date(dateStr.replace(' ', 'T'));
   const now = new Date();
   
   // 將時間部分設為0以進行純日期比較
