@@ -20,7 +20,17 @@
       "Bash(gh auth:*)",
       "Bash(git remote remove:*)",
       "Bash(timeout 30s npm start)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(ls:*)",
+      "Bash(timeout 10 npx expo start:*)",
+      "Bash(timeout 15 npx expo start --clear 2 >& 1)",
+      "Bash(timeout 10 npx @expo/cli start --clear 2 >& 1)",
+      "Bash(npm --version)",
+      "Bash(expo --version)",
+      "Bash(npm config:*)",
+      "Bash(ln:*)",
+      "Bash(timeout 10 npm start)",
+      "WebFetch(domain:stackoverflow.com)"
     ],
     "deny": []
   }

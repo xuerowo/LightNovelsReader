@@ -2981,23 +2981,29 @@ const App: React.FC = () => {
           justifyContent: 'center',
           alignItems: 'center'
         }}>
+          {/* 關閉按鈕區域 */}
           <Pressable
             style={{
               position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              zIndex: 1
+              top: 40,
+              right: 20,
+              width: 40,
+              height: 40,
+              borderRadius: 20,
+              backgroundColor: 'rgba(0,0,0,0.5)',
+              justifyContent: 'center',
+              alignItems: 'center',
+              zIndex: 10
             }}
             onPress={closeLightbox}
-          />
+          >
+            <Text style={{ color: 'white', fontSize: 18, fontWeight: 'bold' }}>×</Text>
+          </Pressable>
+          
           {lightboxImages.length > 0 && (
             <ScrollView
               style={{
-                width: '100%',
-                height: '100%',
-                zIndex: 2
+                flex: 1
               }}
               contentContainerStyle={{
                 flex: 1,
@@ -3006,8 +3012,16 @@ const App: React.FC = () => {
               }}
               maximumZoomScale={3}
               minimumZoomScale={1}
+              pinchGestureEnabled={true}
+              scrollEnabled={true}
+              bouncesZoom={true}
+              bounces={false}
+              directionalLockEnabled={true}
               showsHorizontalScrollIndicator={false}
               showsVerticalScrollIndicator={false}
+              centerContent={true}
+              alwaysBounceVertical={false}
+              alwaysBounceHorizontal={false}
             >
               <ExpoImage
                 source={{ uri: lightboxImages[lightboxIndex]?.uri }}
@@ -3016,6 +3030,7 @@ const App: React.FC = () => {
                   height: Dimensions.get('window').height
                 }}
                 contentFit="contain"
+                contentPosition="center"
               />
             </ScrollView>
           )}
