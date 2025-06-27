@@ -82,9 +82,14 @@ def run_command(command, description, cwd=None, show_output=False):
             return True, result.stdout
         else:
             print_colored(f"❌ {description} 失敗", 'red')
+            # 合併 stdout 和 stderr 以獲取完整的錯誤訊息
+            full_output = ""
             if result.stderr.strip():
                 print_colored(result.stderr.strip(), 'red')
-            return False, result.stderr
+                full_output += result.stderr
+            if result.stdout.strip():
+                full_output += "\n" + result.stdout
+            return False, full_output.strip()
     except Exception as e:
         print_colored(f"❌ 執行 {description} 時發生錯誤: {e}", 'red')
         return False, str(e)
@@ -259,65 +264,6 @@ def decode_filename(filename):
         # 最終回退到原始字符串
         return original_filename
 
-def should_ignore_file(filename):
-    """判斷是否應該忽略特定檔案"""
-    import re
-    
-    # 解碼檔名以正確處理中文路徑
-    decoded_filename = decode_filename(filename)
-    
-    ignore_patterns = [
-        # Claude Code 相關檔案
-        r'^\.claude/',
-        r'^CLAUDE\.md$',
-        # 常見的臨時檔案和系統檔案
-        r'\.tmp$', r'\.temp$', r'~$',
-        r'Thumbs\.db$', r'\.DS_Store$',
-        r'\.swp$', r'\.swo$', r'\.bak$', r'\.orig$',
-        # 編輯器配置
-        r'^\.vscode/', r'^\.idea/',
-        # Node.js 和 Python 相關
-        r'^node_modules/', r'^__pycache__/',
-        # 日誌檔案
-        r'\.log$', r'\.pid$'
-    ]
-    
-    for pattern in ignore_patterns:
-        if re.search(pattern, decoded_filename, re.IGNORECASE):
-            return True
-    return False
-
-def filter_git_status(git_status):
-    """過濾 Git 狀態，移除應忽略的檔案"""
-    if not git_status.strip():
-        return git_status, []
-    
-    lines = git_status.strip().split('\n')
-    filtered_lines = []
-    ignored_files = []
-    
-    for line in lines:
-        if len(line) < 3:
-            continue
-            
-        # Git --porcelain 格式：正確解析狀態和檔名
-        if len(line) >= 3 and line[2] == ' ':
-            # 標準格式：XY filename
-            filename = line[3:]
-        else:
-            # 可能是簡化格式，需要找到第一個空格
-            space_index = line.find(' ')
-            if space_index > 0:
-                filename = line[space_index + 1:]
-            else:
-                continue
-        
-        if should_ignore_file(filename):
-            ignored_files.append(decode_filename(filename))
-        else:
-            filtered_lines.append(line)
-    
-    return '\n'.join(filtered_lines), ignored_files
 
 def generate_commit_message(git_status):
     """根據 Git 狀態生成智慧 commit 訊息"""
@@ -433,6 +379,58 @@ def setup_git_encoding():
         # 如果設定失敗，不影響主要功能
         pass
 
+def handle_push_conflict(target_branch, auto_pull=False):
+    """處理推送衝突，嘗試自動拉取並重新推送"""
+    print_colored("\n🔍 檢測到推送衝突，遠端有新的提交", 'yellow')
+    
+    if not auto_pull:
+        print_colored("解決方案:", 'cyan')
+        print_colored("1. 自動拉取遠端變更並重新推送", 'white')
+        print_colored("2. 手動處理（退出腳本）", 'white')
+        
+        while True:
+            choice = input("\n請選擇 (1/2): ").strip()
+            if choice == "1":
+                break
+            elif choice == "2":
+                print_colored("請手動執行以下命令解決衝突:", 'yellow')
+                print_colored(f"git pull origin {target_branch}", 'cyan')
+                print_colored(f"git push origin {target_branch}", 'cyan')
+                return False
+            else:
+                print_colored("請輸入 1 或 2", 'red')
+    else:
+        print_colored("🤖 自動拉取模式已啟用", 'cyan')
+    
+    # 嘗試拉取遠端變更
+    print_colored(f"\n🔄 正在拉取遠端分支 {target_branch}...", 'cyan')
+    success, output = run_command(
+        ["git", "pull", "origin", target_branch],
+        f"拉取遠端分支 {target_branch}"
+    )
+    
+    if not success:
+        print_colored("❌ 拉取失敗，可能有合併衝突", 'red')
+        print_colored("請手動解決衝突後再次運行腳本", 'yellow')
+        if "merge conflict" in output.lower() or "conflict" in output.lower():
+            print_colored("檢測到合併衝突，請手動處理:", 'red')
+            print_colored("1. 編輯衝突檔案", 'white')
+            print_colored("2. git add <已解決的檔案>", 'white')
+            print_colored("3. git commit", 'white')
+            print_colored(f"4. git push origin {target_branch}", 'white')
+        return False
+    
+    print_colored("✅ 成功拉取遠端變更", 'green')
+    
+    # 重新嘗試推送
+    print_colored(f"\n🔄 重新推送到遠端分支 {target_branch}...", 'cyan')
+    success, _ = run_command(
+        ["git", "push", "origin", target_branch],
+        f"重新推送到遠端分支 {target_branch}"
+    )
+    
+    return success
+
 def main():
     """主要執行函數"""
     parser = argparse.ArgumentParser(description="通用 GitHub 儲存庫自動更新工具")
@@ -440,6 +438,8 @@ def main():
     parser.add_argument("--message", "-m", help="自定義 commit 訊息")
     parser.add_argument("--branch", "-b", help="指定推送分支（預設為當前分支）")
     parser.add_argument("--no-add", action="store_true", help="不自動添加所有檔案，只處理已暫存的檔案")
+    parser.add_argument("--auto-pull", action="store_true", help="推送失敗時自動拉取遠端變更")
+    parser.add_argument("--debug", action="store_true", help="顯示調試信息")
     
     args = parser.parse_args()
     
@@ -502,29 +502,17 @@ def main():
             input("\n按 Enter 鍵結束...")
             return
     
-    # 過濾 Git 狀態，移除應忽略的檔案
-    filtered_git_status, ignored_files = filter_git_status(git_status)
-    
-    # 顯示被忽略的檔案
-    if ignored_files:
-        print_colored(f"\n🚫 自動忽略 {len(ignored_files)} 個檔案:", 'purple')
-        for ignored_file in ignored_files:
-            print_colored(f"   🔒 忽略: {ignored_file}", 'purple')
-    
-    if not filtered_git_status.strip():
-        if ignored_files:
-            print_colored("✨ 所有變更檔案都被自動忽略，無需更新", 'green')
-        else:
-            print_colored("✨ 沒有檔案變更，無需更新", 'green')
+    if not git_status.strip():
+        print_colored("✨ 沒有檔案變更，無需更新", 'green')
         input("\n按 Enter 鍵結束...")
         return
     
     # 顯示變更的檔案
-    display_file_changes(filtered_git_status)
+    display_file_changes(git_status)
     
     if args.dry_run:
         # 預覽模式
-        commit_message = args.message or generate_commit_message(filtered_git_status)
+        commit_message = args.message or generate_commit_message(git_status)
         print_colored(f"\n📝 預覽 Commit 訊息: {commit_message}", 'purple')
         print_colored(f"🌿 預覽目標分支: {target_branch}", 'purple')
         print_colored("\n🔍 預覽模式完成，未執行實際更新", 'purple')
@@ -533,42 +521,18 @@ def main():
     
     # 添加檔案到暫存區
     if not args.no_add:
-        # 選擇性添加變更檔案（排除忽略的檔案）
-        files_to_add = []
-        for line in filtered_git_status.strip().split('\n'):
-            if len(line) < 3:
-                continue
-                
-            # 提取檔案名
-            if len(line) >= 3 and line[2] == ' ':
-                filename = line[3:]
-            else:
-                space_index = line.find(' ')
-                if space_index > 0:
-                    filename = line[space_index + 1:]
-                else:
-                    continue
-            
-            files_to_add.append(filename)
+        success, _ = run_command(
+            ["git", "add", "."],
+            "添加所有變更到暫存區"
+        )
         
-        # 添加每個非忽略的檔案
-        if files_to_add:
-            for filename in files_to_add:
-                success, _ = run_command(
-                    ["git", "add", filename],
-                    f"添加檔案: {decode_filename(filename)}"
-                )
-                if not success:
-                    print_colored(f"⚠️  無法添加檔案: {decode_filename(filename)}", 'yellow')
-            
-            print_colored(f"✅ 成功添加 {len(files_to_add)} 個檔案到暫存區", 'green')
-        else:
-            print_colored("❌ 沒有檔案需要添加", 'red')
+        if not success:
+            print_colored("❌ 添加檔案到暫存區失敗", 'red')
             input("\n按 Enter 鍵結束...")
             return
     
     # 生成並顯示 commit 訊息
-    commit_message = args.message or generate_commit_message(filtered_git_status)
+    commit_message = args.message or generate_commit_message(git_status)
     print_colored(f"\n📝 Commit 訊息: {commit_message}", 'cyan')
     
     # 提交變更
@@ -583,7 +547,7 @@ def main():
         return
     
     # 推送到遠端儲存庫
-    success, _ = run_command(
+    success, push_output = run_command(
         ["git", "push", "origin", target_branch],
         f"推送到遠端分支 {target_branch}"
     )
@@ -593,8 +557,40 @@ def main():
         if "github.com" in remote_url:
             print_colored(f"🔗 儲存庫: {remote_url}", 'cyan')
     else:
-        print_colored(f"\n❌ 推送到分支 {target_branch} 失敗", 'red')
-        print_colored("請檢查網路連線和 Git 認證設定", 'yellow')
+        # 添加調試信息，顯示實際的錯誤輸出（暫時始終顯示用於測試）
+        print_colored(f"\n🔍 調試信息 - 推送輸出內容:", 'purple')
+        print_colored(f"'{push_output}'", 'purple')
+        
+        # 檢查是否為推送衝突（擴展關鍵字檢測）
+        push_output_lower = push_output.lower()
+        conflict_keywords = [
+            "fetch first",
+            "non-fast-forward", 
+            "rejected",
+            "updates were rejected",
+            "failed to push some refs",
+            "tip of your current branch is behind"
+        ]
+        
+        is_push_conflict = any(keyword in push_output_lower for keyword in conflict_keywords)
+        
+        if is_push_conflict:
+            print_colored("🎯 檢測到推送衝突", 'yellow')
+            
+            # 嘗試處理推送衝突
+            conflict_resolved = handle_push_conflict(target_branch, args.auto_pull)
+            
+            if conflict_resolved:
+                print_colored(f"\n🎉 成功解決衝突並更新到 GitHub 分支 {target_branch}!", 'green')
+                if "github.com" in remote_url:
+                    print_colored(f"🔗 儲存庫: {remote_url}", 'cyan')
+            else:
+                print_colored(f"\n❌ 無法自動解決推送衝突", 'red')
+        else:
+            print_colored(f"\n❌ 推送到分支 {target_branch} 失敗", 'red')
+            print_colored("請檢查網路連線和 Git 認證設定", 'yellow')
+            if push_output.strip():
+                print_colored(f"錯誤詳情: {push_output.strip()}", 'red')
     
     print_colored("\n" + "=" * 60, 'blue')
     print_colored("🏁 自動更新流程完成", 'blue')
