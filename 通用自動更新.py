@@ -557,9 +557,10 @@ def main():
         if "github.com" in remote_url:
             print_colored(f"🔗 儲存庫: {remote_url}", 'cyan')
     else:
-        # 添加調試信息，顯示實際的錯誤輸出（暫時始終顯示用於測試）
-        print_colored(f"\n🔍 調試信息 - 推送輸出內容:", 'purple')
-        print_colored(f"'{push_output}'", 'purple')
+        # 調試信息，僅在 debug 模式下顯示
+        if args.debug:
+            print_colored(f"\n🔍 調試信息 - 推送輸出內容:", 'purple')
+            print_colored(f"'{push_output}'", 'purple')
         
         # 檢查是否為推送衝突（擴展關鍵字檢測）
         push_output_lower = push_output.lower()
