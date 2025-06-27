@@ -50,8 +50,3 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 支援 Preview 模式生成 APK
 - 配置了完整的 Android 權限（通知、喚醒鎖定等）
 - 啟用了 React Native 新架構
-
-## 注意事項
-- 該應用程式專為繁體中文輕小說閱讀設計
-- 在 Expo Go 環境中某些功能（如導航欄顏色）可能不可用
-- 背景任務功能需要在 development build 或發布版本中才能正常工作
