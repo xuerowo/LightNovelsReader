@@ -55,7 +55,7 @@ def set_window_title(title):
         except:
             os.system(f'title {title}')
 
-def run_command(command, description, cwd=None, show_output=False):
+def run_command(command, description, cwd=None, show_output=False, capture_output=False):
     """執行命令並顯示結果"""
     if not isinstance(command, str):
         cmd_str = ' '.join(command)
@@ -64,32 +64,51 @@ def run_command(command, description, cwd=None, show_output=False):
     
     print_colored(f"\n🔄 {description}...", 'cyan')
     try:
-        result = subprocess.run(
-            command,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding='utf-8',
-            errors='ignore',
-            shell=True if isinstance(command, str) else False
-        )
-        
-        if result.returncode == 0:
-            print_colored(f"✅ {description} 完成", 'green')
-            if show_output and result.stdout.strip():
-                print(result.stdout.strip())
-            return True, result.stdout
+        if capture_output:
+            # 需要捕獲輸出的情況（如推送衝突檢測）
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding='utf-8',
+                errors='ignore',
+                shell=True if isinstance(command, str) else False
+            )
+            
+            if result.returncode == 0:
+                print_colored(f"✅ {description} 完成", 'green')
+                if show_output and result.stdout.strip():
+                    print(result.stdout.strip())
+                return True, result.stdout
+            else:
+                print_colored(f"❌ {description} 失敗", 'red')
+                # 合併 stdout 和 stderr 以獲取完整的錯誤訊息
+                full_output = ""
+                if result.stderr.strip():
+                    print_colored(result.stderr.strip(), 'red')
+                    full_output += result.stderr
+                if result.stdout.strip():
+                    full_output += "\n" + result.stdout
+                return False, full_output.strip()
         else:
-            print_colored(f"❌ {description} 失敗", 'red')
-            # 合併 stdout 和 stderr 以獲取完整的錯誤訊息
-            full_output = ""
-            if result.stderr.strip():
-                print_colored(result.stderr.strip(), 'red')
-                full_output += result.stderr
-            if result.stdout.strip():
-                full_output += "\n" + result.stdout
-            return False, full_output.strip()
+            # 即時輸出模式
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                text=True,
+                encoding='utf-8',
+                errors='ignore',
+                shell=True if isinstance(command, str) else False
+            )
+            
+            if result.returncode == 0:
+                print_colored(f"✅ {description} 完成", 'green')
+                return True, ""
+            else:
+                print_colored(f"❌ {description} 失敗", 'red')
+                return False, ""
     except Exception as e:
         print_colored(f"❌ 執行 {description} 時發生錯誤: {e}", 'red')
         return False, str(e)
@@ -406,7 +425,8 @@ def handle_push_conflict(target_branch, auto_pull=False):
     print_colored(f"\n🔄 正在拉取遠端分支 {target_branch}...", 'cyan')
     success, output = run_command(
         ["git", "pull", "origin", target_branch],
-        f"拉取遠端分支 {target_branch}"
+        f"拉取遠端分支 {target_branch}",
+        capture_output=True
     )
     
     if not success:
@@ -426,7 +446,8 @@ def handle_push_conflict(target_branch, auto_pull=False):
     print_colored(f"\n🔄 重新推送到遠端分支 {target_branch}...", 'cyan')
     success, _ = run_command(
         ["git", "push", "origin", target_branch],
-        f"重新推送到遠端分支 {target_branch}"
+        f"重新推送到遠端分支 {target_branch}",
+        capture_output=False
     )
     
     return success
@@ -477,7 +498,8 @@ def main():
     # 檢查 Git 狀態
     success, git_status = run_command(
         ["git", "status", "--porcelain"],
-        "檢查 Git 狀態"
+        "檢查 Git 狀態",
+        capture_output=True
     )
     
     # 如果 Git 狀態檢查失敗，嘗試修復安全目錄問題
@@ -487,7 +509,8 @@ def main():
             if fix_git_safe_directory():
                 success, git_status = run_command(
                     ["git", "status", "--porcelain"],
-                    "重新檢查 Git 狀態"
+                    "重新檢查 Git 狀態",
+                    capture_output=True
                 )
                 if not success:
                     print_colored("❌ 修復後仍然無法檢查 Git 狀態", 'red')
@@ -523,7 +546,8 @@ def main():
     if not args.no_add:
         success, _ = run_command(
             ["git", "add", "."],
-            "添加所有變更到暫存區"
+            "添加所有變更到暫存區",
+            capture_output=False
         )
         
         if not success:
@@ -538,7 +562,8 @@ def main():
     # 提交變更
     success, _ = run_command(
         ["git", "commit", "-m", commit_message],
-        "提交變更"
+        "提交變更",
+        capture_output=False
     )
     
     if not success:
@@ -549,7 +574,8 @@ def main():
     # 推送到遠端儲存庫
     success, push_output = run_command(
         ["git", "push", "origin", target_branch],
-        f"推送到遠端分支 {target_branch}"
+        f"推送到遠端分支 {target_branch}",
+        capture_output=True
     )
     
     if success:
