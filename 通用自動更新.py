@@ -11,6 +11,7 @@ import subprocess
 import argparse
 import time
 import locale
+import shlex
 from pathlib import Path
 
 def print_colored(text, color='white'):
@@ -64,6 +65,12 @@ def run_command(command, description, cwd=None, show_output=False, capture_outpu
     
     print_colored(f"\n🔄 {description}...", 'cyan')
     try:
+        # 對於 Git 命令，確保檔案路徑正確處理
+        if isinstance(command, list) and len(command) >= 3 and command[0] == "git" and command[1] == "add":
+            # 對 Git add 命令使用特殊處理
+            git_add_command = ["git", "add", "--"] + command[2:]  # 添加 -- 分隔符
+            command = git_add_command
+        
         if capture_output:
             # 需要捕獲輸出的情況（如推送衝突檢測）
             result = subprocess.run(

@@ -2058,7 +2058,7 @@ const App: React.FC = () => {
       padding: 10,
     },
     contentContainer: {
-      padding: 15,
+      padding: 10,
       paddingBottom: insets.bottom > 0 ? insets.bottom + 40 : 60,
     },
     content: {
@@ -2494,7 +2494,7 @@ const App: React.FC = () => {
           styles.contentContainer,
           { 
             backgroundColor: getBackgroundColor(),
-            paddingHorizontal: 16
+            paddingHorizontal: 12
           }
         ]}
         onScroll={(event) => {
