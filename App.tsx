@@ -1364,6 +1364,9 @@ const App: React.FC = () => {
   const fetchChapterContent = async (chapter: Chapter) => {
     if (!currentNovel) return;
 
+    // 在獲取新章節前保存當前狀態
+    await saveCurrentState();
+
     try {
       setContentLoading(true);
       setError(null);
@@ -1461,7 +1464,10 @@ const App: React.FC = () => {
     }
   };
 
-  const handleReturnToChapters = useCallback((): void => {
+  const handleReturnToChapters = useCallback(async (): Promise<void> => {
+    // 在返回章節列表前保存當前狀態
+    await saveCurrentState();
+    
     if (currentNovel && lastReadChapter[currentNovel]) {
       setCurrentContent('');
 
@@ -1474,9 +1480,12 @@ const App: React.FC = () => {
         }
       }, 0);
     }
-  }, [currentNovel, lastReadChapter, scrollPosition, settings.theme]);
+  }, [currentNovel, lastReadChapter, scrollPosition, settings.theme, saveCurrentState]);
 
-  const handleReturnToNovels = useCallback((): void => {
+  const handleReturnToNovels = useCallback(async (): Promise<void> => {
+    // 在返回小說列表前保存當前狀態
+    await saveCurrentState();
+    
     setChapters([]);
     setCurrentNovel(null);
     setFilteredNovels(novels);
@@ -1487,18 +1496,21 @@ const App: React.FC = () => {
         animated: false
       });
     }
-  }, [scrollPosition, novels]);
+  }, [scrollPosition, novels, saveCurrentState]);
 
-  const navigateChapter = useCallback((direction: 'prev' | 'next'): void => {
+  const navigateChapter = useCallback(async (direction: 'prev' | 'next'): Promise<void> => {
+    // 在章節切換前保存當前狀態
+    await saveCurrentState();
+    
     const currentIndex = chapters.findIndex(
       chapter => chapter.title === lastReadChapter[currentNovel ?? '']
     );
     const newIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1;
 
     if (newIndex >= 0 && newIndex < chapters.length) {
-      fetchChapterContent(chapters[newIndex]);
+      await fetchChapterContent(chapters[newIndex]);
     }
-  }, [chapters, currentNovel, lastReadChapter, settings.theme]);
+  }, [chapters, currentNovel, lastReadChapter, settings.theme, saveCurrentState, fetchChapterContent]);
 
   // 檢查是否已經是第一章
   const isFirstChapter = useCallback((): boolean => {
@@ -1552,6 +1564,21 @@ const App: React.FC = () => {
     },
     [scrollPosition, settings, debouncedScrollHandler]
   );
+
+  // 強制保存當前狀態的函數
+  const saveCurrentState = useCallback(async () => {
+    try {
+      const newSettings = {
+        ...settings,
+        lastReadChapter,
+        scrollPosition
+      };
+      await saveLocalData('settings', newSettings);
+      logger.log('已強制保存當前狀態');
+    } catch (error) {
+      logger.error('強制保存狀態失敗:', error);
+    }
+  }, [settings, lastReadChapter, scrollPosition]);
 
   const handleCheckUpdate = async () => {
     try {
@@ -2616,10 +2643,10 @@ const App: React.FC = () => {
   useEffect(() => {
     const backAction = () => {
       if (currentContent) {
-        handleReturnToChapters();
+        handleReturnToChapters().catch(error => logger.error('返回章節列表失敗:', error));
         return true;
       } else if (chapters.length > 0) {
-        handleReturnToNovels();
+        handleReturnToNovels().catch(error => logger.error('返回小說列表失敗:', error));
         return true;
       } else if (novels.length > 0) {
         BackHandler.exitApp();
@@ -2744,6 +2771,20 @@ const App: React.FC = () => {
         }
         
         lastActiveTime = now;
+      } else if (nextAppState === 'background' || nextAppState === 'inactive') {
+        // 當應用程式進入背景或非活躍狀態時，保存當前滾動位置
+        try {
+          // 保存所有當前設置和滾動位置
+          const newSettings = {
+            ...settings,
+            lastReadChapter,
+            scrollPosition
+          };
+          await saveLocalData('settings', newSettings);
+          logger.log('應用程式進入背景，已保存滾動位置和設置');
+        } catch (error) {
+          logger.error('保存背景狀態失敗:', error);
+        }
       }
     };
 
@@ -2751,6 +2792,23 @@ const App: React.FC = () => {
     
     return () => {
       subscription?.remove();
+      
+      // 組件卸載時保存當前狀態
+      const saveOnUnmount = async () => {
+        try {
+          const newSettings = {
+            ...settings,
+            lastReadChapter,
+            scrollPosition
+          };
+          await saveLocalData('settings', newSettings);
+          logger.log('組件卸載時已保存滾動位置和設置');
+        } catch (error) {
+          logger.error('組件卸載時保存狀態失敗:', error);
+        }
+      };
+      
+      saveOnUnmount();
     };
   }, [currentNovel]);
 
@@ -2915,7 +2973,7 @@ const App: React.FC = () => {
           <View style={styles.header}>
             <TouchableOpacity
               style={styles.backButton}
-              onPress={handleReturnToChapters}
+              onPress={() => handleReturnToChapters().catch(error => logger.error('返回章節列表失敗:', error))}
             >
               <MaterialIcons 
                 name="chevron-left" 
@@ -2951,7 +3009,7 @@ const App: React.FC = () => {
             <View style={styles.navigationBar}>
               <TouchableOpacity
                 style={styles.button}
-                onPress={() => navigateChapter('prev')}
+                onPress={() => navigateChapter('prev').catch(error => logger.error('切換章節失敗:', error))}
                 disabled={isFirstChapter()}
               >
                 <MaterialIcons 
@@ -2962,7 +3020,7 @@ const App: React.FC = () => {
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.button}
-                onPress={() => navigateChapter('next')}
+                onPress={() => navigateChapter('next').catch(error => logger.error('切換章節失敗:', error))}
                 disabled={isLastChapter()}
               >
                 <MaterialIcons 
@@ -2980,7 +3038,7 @@ const App: React.FC = () => {
             <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
               <TouchableOpacity
                 style={styles.backButton}
-                onPress={handleReturnToNovels}
+                onPress={() => handleReturnToNovels().catch(error => logger.error('返回小說列表失敗:', error))}
               >
                 <MaterialIcons 
                   name="chevron-left" 
