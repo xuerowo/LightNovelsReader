@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, ScrollView, ActivityIndicator } from 'react-native';
 import NovelCard from './NovelCard';
+import CustomScrollView from './CustomScrollView';
 import { Novel } from '../types/novelTypes';
 
 interface NovelGridProps {
@@ -50,7 +51,7 @@ const NovelGrid: React.FC<NovelGridProps> = ({
   }
 
   return (
-    <ScrollView
+    <CustomScrollView
       style={{ flex: 1 }}
       contentContainerStyle={{
         flexDirection: 'row',
@@ -60,11 +61,11 @@ const NovelGrid: React.FC<NovelGridProps> = ({
         ...contentContainerStyle,
       }}
       onScroll={onScroll}
-      scrollEventThrottle={100}
-      showsVerticalScrollIndicator={true}
-      showsHorizontalScrollIndicator={false}
-      indicatorStyle={theme === 'dark' ? 'white' : 'black'}
       refreshControl={refreshControl}
+      indicatorColor={theme === 'dark' ? '#ffffff' : '#000000'}
+      indicatorWidth={4}
+      autoHide={true}
+      hideTimeout={1500}
     >
       {novels.map((novel) => (
         <NovelCard
@@ -76,7 +77,7 @@ const NovelGrid: React.FC<NovelGridProps> = ({
           onImagePress={onImagePress}
         />
       ))}
-    </ScrollView>
+    </CustomScrollView>
   );
 };
 

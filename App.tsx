@@ -26,6 +26,7 @@ import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image as ExpoImage } from 'expo-image';
 import NovelGrid from './components/NovelGrid';
+import CustomScrollView from './components/CustomScrollView';
 import * as Notifications from 'expo-notifications';
 import * as ExpoBackgroundFetch from 'expo-background-fetch';
 import * as TaskManager from 'expo-task-manager';
@@ -687,17 +688,17 @@ const ChapterList: React.FC<ChapterListProps> = ({
   };
 
   return (
-    <ScrollView
+    <CustomScrollView
       ref={scrollViewRef}
       style={styles.listContainer}
       contentContainerStyle={{ paddingBottom: 80 }}
       onScroll={onScroll}
-      scrollEventThrottle={100}
       onScrollBeginDrag={(e) => e.persist()}
-      showsVerticalScrollIndicator={true}
-      showsHorizontalScrollIndicator={false}
-      indicatorStyle={theme === 'dark' ? 'white' : 'black'}
       refreshControl={refreshControl}
+      indicatorColor={theme === 'dark' ? '#ffffff' : '#000000'}
+      indicatorWidth={4}
+      autoHide={true}
+      hideTimeout={1500}
     >
       {ListHeaderComponent}
       {chapters.map((chapter) => {
@@ -749,7 +750,7 @@ const ChapterList: React.FC<ChapterListProps> = ({
           </TouchableOpacity>
         );
       })}
-    </ScrollView>
+    </CustomScrollView>
   );
 };
 
@@ -2557,7 +2558,7 @@ const App: React.FC = () => {
   // 渲染章節內容
   const renderChapterContent = useCallback(() => {
     return (
-      <ScrollView 
+      <CustomScrollView 
         ref={contentScrollViewRef}
         style={[
           styles.contentContainer,
@@ -2574,11 +2575,11 @@ const App: React.FC = () => {
             );
           }
         }}
-        scrollEventThrottle={100}
         onScrollBeginDrag={(e) => e.persist()}
-        showsVerticalScrollIndicator={true}
-        showsHorizontalScrollIndicator={false}
-        indicatorStyle={settings.theme === 'dark' ? 'white' : 'black'}
+        indicatorColor={settings.theme === 'dark' ? '#ffffff' : '#000000'}
+        indicatorWidth={4}
+        autoHide={true}
+        hideTimeout={2000}
         refreshControl={
           <RefreshControl
             refreshing={refreshingContent}
@@ -2604,7 +2605,7 @@ const App: React.FC = () => {
         </View>
         
         <View style={{ height: 10 }} />
-      </ScrollView>
+      </CustomScrollView>
     );
   }, [currentContent, markdownStyles, markdownRules, getBackgroundColor, getTextColor, handleScroll, refreshingContent, onRefreshContent, contentScrollViewRef, styles]);
 
