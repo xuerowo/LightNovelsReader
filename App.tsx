@@ -2377,8 +2377,29 @@ const App: React.FC = () => {
     body: {
       ...styles.content,
       fontSize: settings.fontSize,
-      lineHeight: settings.fontSize * settings.lineHeight,
+      lineHeight: Platform.OS === 'android' 
+        ? Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 6)
+        : Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 4),
       color: getTextColor(),
+      includeFontPadding: false,
+      ...(Platform.OS === 'android' && {
+        textBreakStrategy: 'simple' as const,
+        allowFontScaling: false,
+      }),
+    },
+    paragraph: {
+      fontSize: settings.fontSize,
+      lineHeight: Platform.OS === 'android' 
+        ? Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 6)
+        : Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 4),
+      color: getTextColor(),
+      marginVertical: Platform.OS === 'android' ? 6 : 4,
+      includeFontPadding: false,
+      textAlignVertical: 'center' as const,
+      ...(Platform.OS === 'android' && {
+        textBreakStrategy: 'simple' as const,
+        allowFontScaling: false,
+      }),
     },
     strong: {
       fontWeight: 'bold' as const,
@@ -2452,6 +2473,27 @@ const App: React.FC = () => {
 
   // 優化的 Markdown 渲染規則
   const markdownRules = useMemo(() => ({
+    paragraph: (node: any, children: any, _parent: any, _styles: any) => (
+      <View key={node.key} style={{ marginVertical: Platform.OS === 'android' ? 6 : 4 }}>
+        <Text 
+          style={{
+            fontSize: settings.fontSize,
+            lineHeight: Platform.OS === 'android' 
+              ? Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 8)
+              : Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 4),
+            color: getTextColor(),
+            includeFontPadding: false,
+            textAlignVertical: 'center' as const,
+            ...(Platform.OS === 'android' && {
+              textBreakStrategy: 'simple' as const,
+              allowFontScaling: false,
+            }),
+          }}
+        >
+          {children}
+        </Text>
+      </View>
+    ),
     image: (node: any, _children: any, _parent: any, _styles: any) => {
       const { src } = node.attributes;
       return <MarkdownImage 
@@ -2483,7 +2525,7 @@ const App: React.FC = () => {
         </Text>
       </View>
     ),
-  }), [settings.theme, getBackgroundColor, markdownStyles, headingContainerStyles, openLightbox]);
+  }), [settings.theme, getBackgroundColor, markdownStyles, headingContainerStyles, openLightbox, settings.fontSize, settings.lineHeight, getTextColor]);
 
   // 渲染章節內容
   const renderChapterContent = useCallback(() => {
