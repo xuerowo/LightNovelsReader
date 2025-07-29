@@ -2087,7 +2087,6 @@ const App: React.FC = () => {
     },
     contentContainer: {
       padding: 10,
-      paddingBottom: insets.bottom > 0 ? insets.bottom + 40 : 60,
     },
     content: {
       fontSize: 18,
@@ -2204,7 +2203,7 @@ const App: React.FC = () => {
       flexDirection: 'row',
       justifyContent: 'space-between',
       paddingBottom: insets.bottom > 0 ? 0 : 8,
-      paddingTop: 8,
+      paddingTop: 4,
       paddingHorizontal: 10,
       backgroundColor: getBackgroundColor(),
     },
@@ -2380,7 +2379,7 @@ const App: React.FC = () => {
     chapterEndContainer: {
       flexDirection: 'row',
       alignItems: 'center',
-      marginVertical: 30,
+      marginVertical: 15,
       marginHorizontal: -16,
       paddingHorizontal: 16,
     },
@@ -2564,7 +2563,8 @@ const App: React.FC = () => {
           styles.contentContainer,
           { 
             backgroundColor: getBackgroundColor(),
-            paddingHorizontal: 12
+            paddingHorizontal: 12,
+            flex: 1
           }
         ]}
         onScroll={(event) => {
@@ -2603,8 +2603,6 @@ const App: React.FC = () => {
           <Text style={styles.chapterEndText}>本話結束</Text>
           <View style={styles.chapterEndDivider} />
         </View>
-        
-        <View style={{ height: 10 }} />
       </CustomScrollView>
     );
   }, [currentContent, markdownStyles, markdownRules, getBackgroundColor, getTextColor, handleScroll, refreshingContent, onRefreshContent, contentScrollViewRef, styles]);
