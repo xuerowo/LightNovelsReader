@@ -2165,7 +2165,7 @@ const App: React.FC = () => {
       alignItems: 'center',
       justifyContent: 'space-between',
       paddingHorizontal: 16,
-      height: 56,
+      height: 48,
     },
     headerRight: {
       flexDirection: 'row',
@@ -2202,13 +2202,13 @@ const App: React.FC = () => {
     navigationBar: {
       flexDirection: 'row',
       justifyContent: 'space-between',
-      paddingBottom: insets.bottom > 0 ? 0 : 8,
-      paddingTop: 4,
+      paddingBottom: insets.bottom > 0 ? 0 : 4,
+      paddingTop: 2,
       paddingHorizontal: 10,
       backgroundColor: getBackgroundColor(),
     },
     button: {
-      padding: 10,
+      padding: 8,
       borderRadius: 5,
     },
     buttonText: {
@@ -3013,7 +3013,7 @@ const App: React.FC = () => {
               >
                 <MaterialIcons 
                   name="arrow-back" 
-                  size={24} 
+                  size={22} 
                   color={isFirstChapter() ? `${getTextColor()}50` : getTextColor()} 
                 />
               </TouchableOpacity>
@@ -3024,7 +3024,7 @@ const App: React.FC = () => {
               >
                 <MaterialIcons 
                   name="arrow-forward" 
-                  size={24} 
+                  size={22} 
                   color={isLastChapter() ? `${getTextColor()}50` : getTextColor()} 
                 />
               </TouchableOpacity>
