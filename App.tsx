@@ -25,6 +25,7 @@ import {
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image as ExpoImage } from 'expo-image';
+import * as FileSystem from 'expo-file-system';
 import NovelGrid from './components/NovelGrid';
 import CustomScrollView from './components/CustomScrollView';
 import * as Notifications from 'expo-notifications';
@@ -46,6 +47,248 @@ import { Novel, Chapter } from './types/novelTypes';
 import * as diff from 'diff';
 import logger from './utils/logger';
 import { resolveChapterUrl, resolveImageUrl, resolveCoverUrl } from './utils/pathUtils';
+
+// 圖片緩存管理類
+class ImageCacheManager {
+  private static instance: ImageCacheManager;
+  private cacheDir: string;
+  private metadataKey = 'image_cache_metadata';
+
+  private constructor() {
+    this.cacheDir = `${FileSystem.documentDirectory}images/`;
+  }
+
+  static getInstance(): ImageCacheManager {
+    if (!ImageCacheManager.instance) {
+      ImageCacheManager.instance = new ImageCacheManager();
+    }
+    return ImageCacheManager.instance;
+  }
+
+  // 確保緩存目錄存在
+  private async ensureCacheDir(): Promise<void> {
+    try {
+      const dirInfo = await FileSystem.getInfoAsync(this.cacheDir);
+      if (!dirInfo.exists) {
+        await FileSystem.makeDirectoryAsync(this.cacheDir, { intermediates: true });
+      }
+    } catch (error) {
+      logger.error('創建緩存目錄失敗:', error);
+    }
+  }
+
+  // 生成緩存文件路徑
+  private getCacheFilePath(type: 'cover' | 'content', novelTitle: string, imageName: string = ''): string {
+    const sanitizedTitle = novelTitle.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '_');
+    const sanitizedImageName = imageName.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '_');
+    
+    if (type === 'cover') {
+      return `${this.cacheDir}covers/${sanitizedTitle}_cover.jpg`;
+    } else {
+      return `${this.cacheDir}content/${sanitizedTitle}_${sanitizedImageName}.jpg`;
+    }
+  }
+
+  // 獲取緩存元數據
+  private async getCacheMetadata(): Promise<Record<string, { path: string; timestamp: number; url: string }>> {
+    try {
+      const data = await AsyncStorage.getItem(this.metadataKey);
+      return data ? JSON.parse(data) : {};
+    } catch (error) {
+      logger.error('讀取緩存元數據失敗:', error);
+      return {};
+    }
+  }
+
+  // 保存緩存元數據
+  private async saveCacheMetadata(metadata: Record<string, { path: string; timestamp: number; url: string }>): Promise<void> {
+    try {
+      await AsyncStorage.setItem(this.metadataKey, JSON.stringify(metadata));
+    } catch (error) {
+      logger.error('保存緩存元數據失敗:', error);
+    }
+  }
+
+  // 下載並緩存圖片
+  async cacheImage(imageUrl: string, type: 'cover' | 'content', novelTitle: string, imageName: string = ''): Promise<string | null> {
+    try {
+      await this.ensureCacheDir();
+      
+      const filePath = this.getCacheFilePath(type, novelTitle, imageName);
+      const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
+      
+      // 確保子目錄存在
+      const dirInfo = await FileSystem.getInfoAsync(dirPath);
+      if (!dirInfo.exists) {
+        await FileSystem.makeDirectoryAsync(dirPath, { intermediates: true });
+      }
+
+      // 下載圖片
+      const downloadResult = await FileSystem.downloadAsync(imageUrl, filePath);
+      
+      if (downloadResult.status === 200) {
+        // 更新元數據
+        const metadata = await this.getCacheMetadata();
+        const cacheKey = `${type}_${novelTitle}_${imageName}`;
+        metadata[cacheKey] = {
+          path: filePath,
+          timestamp: Date.now(),
+          url: imageUrl
+        };
+        await this.saveCacheMetadata(metadata);
+        
+        return filePath;
+      }
+      
+      return null;
+    } catch (error) {
+      logger.error('緩存圖片失敗:', error);
+      return null;
+    }
+  }
+
+  // 獲取緩存的圖片路徑
+  async getCachedImagePath(type: 'cover' | 'content', novelTitle: string, imageName: string = ''): Promise<string | null> {
+    try {
+      const metadata = await this.getCacheMetadata();
+      const cacheKey = `${type}_${novelTitle}_${imageName}`;
+      const cacheInfo = metadata[cacheKey];
+      
+      if (cacheInfo && cacheInfo.path) {
+        // 檢查文件是否還存在
+        const fileInfo = await FileSystem.getInfoAsync(cacheInfo.path);
+        if (fileInfo.exists) {
+          return cacheInfo.path;
+        } else {
+          // 文件不存在，清理元數據
+          delete metadata[cacheKey];
+          await this.saveCacheMetadata(metadata);
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      logger.error('獲取緩存圖片路徑失敗:', error);
+      return null;
+    }
+  }
+
+  // 清理指定小說的所有緩存
+  async clearNovelCache(novelTitle: string): Promise<number> {
+    try {
+      const metadata = await this.getCacheMetadata();
+      let deletedCount = 0;
+      
+      const keysToDelete = Object.keys(metadata).filter(key => 
+        key.includes(novelTitle)
+      );
+      
+      for (const key of keysToDelete) {
+        const cacheInfo = metadata[key];
+        if (cacheInfo && cacheInfo.path) {
+          try {
+            await FileSystem.deleteAsync(cacheInfo.path);
+            delete metadata[key];
+            deletedCount++;
+          } catch (error) {
+            logger.warn('刪除緩存文件失敗:', error);
+          }
+        }
+      }
+      
+      if (deletedCount > 0) {
+        await this.saveCacheMetadata(metadata);
+      }
+      
+      return deletedCount;
+    } catch (error) {
+      logger.error('清理小說緩存失敗:', error);
+      return 0;
+    }
+  }
+
+  // 獲取緩存統計信息
+  async getCacheStats(): Promise<{ totalFiles: number; totalSize: number }> {
+    try {
+      const metadata = await this.getCacheMetadata();
+      let totalFiles = 0;
+      let totalSize = 0;
+      
+      for (const cacheInfo of Object.values(metadata)) {
+        if (cacheInfo.path) {
+          try {
+            const fileInfo = await FileSystem.getInfoAsync(cacheInfo.path);
+            if (fileInfo.exists) {
+              totalFiles++;
+              totalSize += fileInfo.size || 0;
+            }
+          } catch (error) {
+            // 忽略單個文件的錯誤
+          }
+        }
+      }
+      
+      return { totalFiles, totalSize };
+    } catch (error) {
+      logger.error('獲取緩存統計失敗:', error);
+      return { totalFiles: 0, totalSize: 0 };
+    }
+  }
+}
+
+// 圖片緩存管理函數（保持向後兼容）
+const getImageCacheKey = (type: 'cover' | 'content', novelTitle: string, imageName: string = '') => {
+  return type === 'cover' 
+    ? `image_cover_${novelTitle}` 
+    : `image_content_${novelTitle}_${imageName}`;
+};
+
+const clearImageCache = async (novelTitle: string): Promise<number> => {
+  try {
+    // 優先使用新的 ImageCacheManager
+    if (global.imageCacheManager) {
+      const deletedCount = await global.imageCacheManager.clearNovelCache(novelTitle);
+      return deletedCount;
+    }
+    
+    // 向後兼容：清理舊的 AsyncStorage 緩存
+    const keys = await AsyncStorage.getAllKeys();
+    const imageCacheKeys = keys.filter(key => 
+      key.startsWith(`image_cover_${novelTitle}`) || 
+      key.startsWith(`image_content_${novelTitle}`)
+    );
+    
+    if (imageCacheKeys.length > 0) {
+      await AsyncStorage.multiRemove(imageCacheKeys);
+    }
+    
+    return imageCacheKeys.length;
+  } catch (error) {
+    logger.error('清除圖片緩存失敗:', error);
+    return 0;
+  }
+};
+
+const getImageCacheSize = async (novelTitle?: string): Promise<number> => {
+  try {
+    // 優先使用新的 ImageCacheManager
+    if (global.imageCacheManager) {
+      const stats = await global.imageCacheManager.getCacheStats();
+      return stats.totalFiles;
+    }
+    
+    // 向後兼容：檢查舊的 AsyncStorage 緩存
+    const keys = await AsyncStorage.getAllKeys();
+    const imageCacheKeys = novelTitle 
+      ? keys.filter(key => key.startsWith(`image_cover_${novelTitle}`) || key.startsWith(`image_content_${novelTitle}`))
+      : keys.filter(key => key.startsWith('image_'));
+    
+    return imageCacheKeys.length;
+  } catch (error) {
+    logger.error('獲取圖片緩存大小失敗:', error);
+    return 0;
+  }
+};
 import { 
   PinchGestureHandler, 
   PanGestureHandler, 
@@ -346,6 +589,15 @@ interface MarkdownImageProps {
   isDarkMode: boolean;
   backgroundColor: string;
   onImagePress?: (imageUri: string) => void;
+}
+
+interface CachedCoverImageProps {
+  coverPath: string;
+  novelTitle: string;
+  style: any;
+  isDarkMode?: boolean;
+  onPress?: () => void;
+  forceRefresh?: boolean;
 }
 
 async function registerBackgroundFetch() {
@@ -768,9 +1020,127 @@ const cleanImageCache = () => {
   }
 };
 
+// 統一的緩存封面圖片組件
+const CachedCoverImage: React.FC<CachedCoverImageProps> = React.memo(({ 
+  coverPath, 
+  novelTitle, 
+  style, 
+  isDarkMode = false, 
+  onPress, 
+  forceRefresh = false 
+}) => {
+  const [imageError, setImageError] = useState(false);
+  const [currentImageUri, setCurrentImageUri] = useState<string>('');
+  const [isLoading, setIsLoading] = useState(true);
+  
+  const resolvedCoverUrl = resolveCoverUrl(coverPath);
+  const cacheManager = ImageCacheManager.getInstance();
+
+  // 基於文件系統的圖片載入邏輯
+  useEffect(() => {
+    const loadImage = async () => {
+      try {
+        setImageError(false);
+        setIsLoading(true);
+        
+        // 1. 先檢查本地文件緩存
+        const cachedPath = await cacheManager.getCachedImagePath('cover', novelTitle);
+        if (cachedPath && !forceRefresh) {
+          setCurrentImageUri(cachedPath);
+          setIsLoading(false);
+        }
+        
+        // 2. 嘗試從網路獲取並緩存最新圖片
+        try {
+          const networkUrl = resolvedCoverUrl;
+          const downloadedPath = await cacheManager.cacheImage(networkUrl, 'cover', novelTitle);
+          
+          if (downloadedPath) {
+            // 網路圖片下載成功，更新顯示
+            setCurrentImageUri(downloadedPath);
+          } else if (!cachedPath) {
+            // 下載失敗且沒有緩存時設為錯誤
+            setImageError(true);
+          }
+        } catch (networkError) {
+          // 網路請求失敗，如果沒有緩存則顯示錯誤
+          if (!cachedPath) {
+            setImageError(true);
+          }
+          logger.warn('載入封面圖片失敗:', networkError);
+        }
+      } catch (error) {
+        logger.error('圖片載入過程出錯:', error);
+        setImageError(true);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadImage();
+  }, [novelTitle, coverPath, resolvedCoverUrl, forceRefresh, cacheManager]);
+
+  if (imageError) {
+    return (
+      <View style={[style, { backgroundColor: isDarkMode ? '#333' : '#f0f0f0', justifyContent: 'center', alignItems: 'center' }]}>
+        <Text style={{ color: isDarkMode ? '#888' : '#666', fontSize: 12 }}>
+          封面圖片
+        </Text>
+      </View>
+    );
+  }
+
+  const ImageComponent = (
+    <View style={style}>
+      <ExpoImage
+        source={{ uri: currentImageUri }}
+        style={style}
+        contentFit="cover"
+        onError={() => setImageError(true)}
+        transition={200}
+      />
+      {isLoading && (
+        <View style={[
+          {
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            justifyContent: 'center',
+            alignItems: 'center',
+            backgroundColor: 'rgba(0,0,0,0.3)'
+          }
+        ]}>
+          <ActivityIndicator size="small" color="#ffffff" />
+        </View>
+      )}
+    </View>
+  );
+
+  if (onPress) {
+    return (
+      <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
+        {ImageComponent}
+      </TouchableOpacity>
+    );
+  }
+
+  return ImageComponent;
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.coverPath === nextProps.coverPath &&
+    prevProps.novelTitle === nextProps.novelTitle &&
+    prevProps.isDarkMode === nextProps.isDarkMode &&
+    prevProps.forceRefresh === nextProps.forceRefresh &&
+    prevProps.onPress === nextProps.onPress
+  );
+});
+
 const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMode, backgroundColor, onImagePress }) => {
-  const [isLoading, setIsLoading] = useState(!imageCache.get(src));
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [currentImageUri, setCurrentImageUri] = useState<string>('');
   const screenWidth = Dimensions.get('window').width;
   const isMounted = useRef(true);
 
@@ -784,23 +1154,63 @@ const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMod
     return resolveImageUrl(src);
   }, [src]);
 
+  const cacheManager = ImageCacheManager.getInstance();
+
+  // 基於文件系統的圖片載入邏輯
   useEffect(() => {
-    if (!imageCache.has(cleanUrl)) {
-      Image.prefetch(cleanUrl).then(() => {
-        if (isMounted.current) {
-          cleanImageCache(); // 清理舊緩存
-          imageCache.set(cleanUrl, true);
+    const loadImage = async () => {
+      if (!isMounted.current) return;
+      
+      try {
+        setError(false);
+        setIsLoading(true);
+        
+        // 生成圖片標識（使用URL作為圖片名稱的一部分）
+        const imageName = src.split('/').pop()?.replace(/[^a-zA-Z0-9]/g, '_') || 'unknown';
+        
+        // 1. 先檢查本地文件緩存
+        const cachedPath = await cacheManager.getCachedImagePath('content', 'current', imageName);
+        if (cachedPath && isMounted.current) {
+          setCurrentImageUri(cachedPath);
           setIsLoading(false);
         }
-      }).catch((error) => {
+        
+        // 2. 嘗試從網路獲取並緩存最新圖片
+        try {
+          const downloadedPath = await cacheManager.cacheImage(cleanUrl, 'content', 'current', imageName);
+          
+          if (downloadedPath && isMounted.current) {
+            // 網路圖片下載成功，更新顯示
+            setCurrentImageUri(downloadedPath);
+            
+            // 更新內存緩存
+            cleanImageCache();
+            imageCache.set(cleanUrl, true);
+          } else if (!cachedPath && isMounted.current) {
+            // 下載失敗且沒有緩存時設為錯誤
+            setError(true);
+          }
+        } catch (networkError) {
+          // 網路請求失敗，如果沒有緩存則顯示錯誤
+          if (!cachedPath && isMounted.current) {
+            setError(true);
+          }
+          logger.warn('載入章節圖片失敗:', networkError);
+        }
+      } catch (error) {
         if (isMounted.current) {
-          logger.error('圖片預載失敗:', error);
+          logger.error('圖片載入過程出錯:', error);
           setError(true);
+        }
+      } finally {
+        if (isMounted.current) {
           setIsLoading(false);
         }
-      });
-    }
-  }, [cleanUrl]);
+      }
+    };
+
+    loadImage();
+  }, [cleanUrl, src, cacheManager]);
 
   const imageStyles = useMemo(() => StyleSheet.create({
     container: {
@@ -826,11 +1236,6 @@ const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMod
     }
   }), [screenWidth, backgroundColor]);
 
-  const source = useMemo(() => ({ 
-    uri: cleanUrl,
-    cache: 'force-cache' as const
-  }), [cleanUrl]);
-
   if (error) {
     return (
       <View style={imageStyles.container}>
@@ -844,18 +1249,20 @@ const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMod
   return (
     <View style={imageStyles.container}>
       <TouchableOpacity 
-        onPress={() => onImagePress?.(cleanUrl)}
+        onPress={() => onImagePress?.(currentImageUri)}
         activeOpacity={0.8}
       >
-        <Image
-          source={source}
+        <ExpoImage
+          source={{ uri: currentImageUri }}
           style={imageStyles.image}
+          contentFit="contain"
           onError={() => {
             if (isMounted.current) {
               setError(true);
               setIsLoading(false);
             }
           }}
+          transition={200}
         />
       </TouchableOpacity>
       {isLoading && (
@@ -953,6 +1360,14 @@ const sendUpdateNotification = async (updates: UpdateInfo[]): Promise<void> => {
 
 const App: React.FC = () => {
   const insets = useSafeAreaInsets();
+  
+  // 初始化全局 ImageCacheManager
+  React.useEffect(() => {
+    if (!global.imageCacheManager) {
+      global.imageCacheManager = ImageCacheManager.getInstance();
+    }
+  }, []);
+  
   const [novels, setNovels] = useState<Novel[]>([]);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [currentContent, setCurrentContent] = useState<string>('');
@@ -1239,56 +1654,61 @@ const App: React.FC = () => {
       setChaptersLoading(true);
       setCurrentNovel(novelTitle);
 
-      // 檢查更新
-      const updateResult = await checkNovelUpdates();
-      
-      if (updateResult?.hasUpdates) {
-        const novelUpdate = updateResult.updates.find(
-          update => update.novelName === novelTitle
-        );
+      // 檢查更新（不影響離線使用）
+      try {
+        const updateResult = await checkNovelUpdates();
         
-        if (novelUpdate) {
-          // 更新章節狀態記錄
-          const chaptersData = await AsyncStorage.getItem('chapters_records');
-          const allChaptersRecord: ChapterRecord = chaptersData ? JSON.parse(chaptersData) : {};
+        if (updateResult?.hasUpdates) {
+          const novelUpdate = updateResult.updates.find(
+            update => update.novelName === novelTitle
+          );
           
-          if (!allChaptersRecord[novelTitle]) {
-            allChaptersRecord[novelTitle] = {};
-          }
+          if (novelUpdate) {
+            // 更新章節狀態記錄
+            const chaptersData = await AsyncStorage.getItem('chapters_records');
+            const allChaptersRecord: ChapterRecord = chaptersData ? JSON.parse(chaptersData) : {};
+            
+            if (!allChaptersRecord[novelTitle]) {
+              allChaptersRecord[novelTitle] = {};
+            }
 
-          // 更新新增章節的狀態
-          novelUpdate.newChapters.forEach(chapterTitle => {
-            allChaptersRecord[novelTitle][chapterTitle] = {
-              name: chapterTitle,
-              sha: '',  // 可以從 API 獲取
-              timestamp: Date.now(),
-              statuses: ['new']
-            };
-          });
-
-          // 更新修改章節的狀態
-          novelUpdate.modifiedChapters.forEach(chapterTitle => {
-            if (allChaptersRecord[novelTitle][chapterTitle]) {
-              allChaptersRecord[novelTitle][chapterTitle].statuses.push('modified');
-              allChaptersRecord[novelTitle][chapterTitle].timestamp = Date.now();
-            } else {
+            // 更新新增章節的狀態
+            novelUpdate.newChapters.forEach(chapterTitle => {
               allChaptersRecord[novelTitle][chapterTitle] = {
                 name: chapterTitle,
                 sha: '',  // 可以從 API 獲取
                 timestamp: Date.now(),
-                statuses: ['modified']
+                statuses: ['new']
               };
-            }
-          });
+            });
 
-          await AsyncStorage.setItem('chapters_records', JSON.stringify(allChaptersRecord));
-          
-          Alert.alert(
-            '發現更新',
-            formatUpdateMessage([novelUpdate]),
-            [{ text: '確定' }]
-          );
+            // 更新修改章節的狀態
+            novelUpdate.modifiedChapters.forEach(chapterTitle => {
+              if (allChaptersRecord[novelTitle][chapterTitle]) {
+                allChaptersRecord[novelTitle][chapterTitle].statuses.push('modified');
+                allChaptersRecord[novelTitle][chapterTitle].timestamp = Date.now();
+              } else {
+                allChaptersRecord[novelTitle][chapterTitle] = {
+                  name: chapterTitle,
+                  sha: '',  // 可以從 API 獲取
+                  timestamp: Date.now(),
+                  statuses: ['modified']
+                };
+              }
+            });
+
+            await AsyncStorage.setItem('chapters_records', JSON.stringify(allChaptersRecord));
+            
+            Alert.alert(
+              '發現更新',
+              formatUpdateMessage([novelUpdate]),
+              [{ text: '確定' }]
+            );
+          }
         }
+      } catch (updateError) {
+        // 更新檢查失敗不影響後續邏輯，繼續使用本地數據
+        logger.warn('更新檢查失敗，繼續使用本地數據:', updateError);
       }
 
       // 1. 先嘗試從網路獲取最新的小說資料（添加 cache-busting）
@@ -1372,41 +1792,75 @@ const App: React.FC = () => {
       setContentLoading(true);
       setError(null);
 
-      // 獲取內容的key (使用舊版格式保持兼容)
-      const contentKey = `content-${currentNovel}-${chapter.title}`;
+      // 統一使用新的存儲鍵格式
+      const newContentKey = `chapter_${currentNovel}_${chapter.title}`;
+      const oldContentKey = `content-${currentNovel}-${chapter.title}`;
       
-      // 獲取本地緩存內容
-      const localContent = await getLocalData(contentKey);
-      
-      // 嘗試從網路獲取內容（添加 cache-busting）
-      try {
-        const resolvedChapterUrl = resolveChapterUrl(chapter.url);
-        const timestamp = Date.now();
-        const urlWithCacheBusting = `${resolvedChapterUrl}?t=${timestamp}`;
-        const response = await fetch(urlWithCacheBusting, {
-          cache: 'no-cache',
-          headers: {
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache',
-            'Expires': '0'
-          }
-        });
-        if (!response.ok) {
-          throw new Error(`下載章節失敗: ${response.status}`);
-        }
-        const newContent = await response.text();
-        
-        // 無需複雜的差異比較，直接保存新內容
-        await saveLocalData(contentKey, newContent);
-        setCurrentContent(newContent);
-      } catch (networkError) {
-        logger.error('從網路獲取章節失敗:', networkError);
-        
-        // 網路請求失敗時，如果有本地緩存則使用本地緩存
+      // 優先讀取新格式，回退到舊格式以保持兼容性
+      let localContent = await getLocalData(newContentKey);
+      if (!localContent) {
+        localContent = await getLocalData(oldContentKey);
+        // 如果找到舊格式數據，遷移到新格式
         if (localContent) {
-          setCurrentContent(localContent);
-        } else {
-          throw networkError; // 如果沒有本地緩存，則拋出錯誤
+          await saveLocalData(newContentKey, localContent);
+          // 保留舊數據一段時間，不立即刪除
+        }
+      }
+      
+      // 優化離線體驗：如果有本地內容，先顯示本地內容，然後嘗試更新
+      if (localContent) {
+        setCurrentContent(localContent);
+        setContentLoading(false); // 先顯示本地內容
+        
+        // 在後台嘗試獲取最新內容
+        try {
+          const resolvedChapterUrl = resolveChapterUrl(chapter.url);
+          const timestamp = Date.now();
+          const urlWithCacheBusting = `${resolvedChapterUrl}?t=${timestamp}`;
+          const response = await fetch(urlWithCacheBusting, {
+            cache: 'no-cache',
+            headers: {
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+              'Pragma': 'no-cache',
+              'Expires': '0'
+            }
+          });
+          if (response.ok) {
+            const newContent = await response.text();
+            // 如果內容有變化，則更新
+            if (newContent !== localContent) {
+              await saveLocalData(newContentKey, newContent);
+              setCurrentContent(newContent);
+            }
+          }
+        } catch (networkError) {
+          // 後台更新失敗不影響用戶體驗
+          logger.debug('後台更新章節失敗:', networkError);
+        }
+      } else {
+        // 沒有本地內容時，必須從網路獲取
+        try {
+          const resolvedChapterUrl = resolveChapterUrl(chapter.url);
+          const timestamp = Date.now();
+          const urlWithCacheBusting = `${resolvedChapterUrl}?t=${timestamp}`;
+          const response = await fetch(urlWithCacheBusting, {
+            cache: 'no-cache',
+            headers: {
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+              'Pragma': 'no-cache',
+              'Expires': '0'
+            }
+          });
+          if (!response.ok) {
+            throw new Error(`下載章節失敗: ${response.status}`);
+          }
+          const newContent = await response.text();
+          
+          await saveLocalData(newContentKey, newContent);
+          setCurrentContent(newContent);
+        } catch (networkError) {
+          logger.error('獲取章節內容失敗:', networkError);
+          throw new Error('無法載入章節內容，請檢查網路連接');
         }
       }
       
@@ -1640,15 +2094,30 @@ const App: React.FC = () => {
               const allChapters = novel.chapters;
               const undownloadedChapters: Chapter[] = [];
   
+              // 檢查哪些章節尚未下載（檢查新舊格式）
               for (const chapter of allChapters) {
-                const contentKey = `chapter_${novelTitle}_${chapter.title}`;
-                const localContent = await getLocalData(contentKey);
-                if (!localContent) {
+                const newContentKey = `chapter_${novelTitle}_${chapter.title}`;
+                const oldContentKey = `content-${novelTitle}-${chapter.title}`;
+                
+                // 檢查新格式和舊格式
+                const hasNewContent = await getLocalData(newContentKey);
+                const hasOldContent = await getLocalData(oldContentKey);
+                
+                // 如果兩種格式都沒有，才需要下載
+                if (!hasNewContent && !hasOldContent) {
                   undownloadedChapters.push(chapter);
+                } else if (hasOldContent && !hasNewContent) {
+                  // 如果只有舊格式，遷移到新格式
+                  await saveLocalData(newContentKey, hasOldContent);
                 }
               }
 
               if (undownloadedChapters.length === 0) {
+                setDownloadProgress({
+                  total: 0,
+                  current: 0,
+                  isDownloading: false
+                });
                 Alert.alert('提示', '所有章節已下載');
                 return;
               }
@@ -1728,25 +2197,43 @@ const App: React.FC = () => {
                       }
 
                       let deletedCount = 0;
-                      // 刪除所有已下載的章節
+                      // 刪除所有已下載的章節（檢查新舊格式）
                       for (const chapter of novel.chapters) {
-                        const contentKey = `chapter_${novelName}_${chapter.title}`;
-                        const hasContent = await getLocalData(contentKey);
-                        if (hasContent) {
-                          await AsyncStorage.removeItem(contentKey);
+                        const newContentKey = `chapter_${novelName}_${chapter.title}`;
+                        const oldContentKey = `content-${novelName}-${chapter.title}`;
+                        
+                        // 檢查並刪除新格式
+                        const hasNewContent = await getLocalData(newContentKey);
+                        if (hasNewContent) {
+                          await AsyncStorage.removeItem(newContentKey);
+                          deletedCount++;
+                        }
+                        
+                        // 檢查並刪除舊格式
+                        const hasOldContent = await getLocalData(oldContentKey);
+                        if (hasOldContent) {
+                          await AsyncStorage.removeItem(oldContentKey);
                           deletedCount++;
                         }
                       }
 
-                      if (deletedCount > 0) {
-                        Alert.alert(
-                          '刪除完成',
-                          `已刪除 ${deletedCount} 個已下載的章節`
-                        );
+                      // 刪除圖片緩存
+                      const deletedImageCount = await clearImageCache(novelName);
+
+                      if (deletedCount > 0 || deletedImageCount > 0) {
+                        let message = '';
+                        if (deletedCount > 0) {
+                          message += `已刪除 ${deletedCount} 個已下載的章節`;
+                        }
+                        if (deletedImageCount > 0) {
+                          if (message) message += '\n';
+                          message += `已刪除 ${deletedImageCount} 個緩存圖片`;
+                        }
+                        Alert.alert('刪除完成', message);
                       } else {
                         Alert.alert(
                           '提示',
-                          '沒有找到已下載的章節'
+                          '沒有找到已下載的章節或緩存圖片'
                         );
                       }
                     } catch (error) {
@@ -2408,9 +2895,8 @@ const App: React.FC = () => {
         ? Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 6)
         : Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 4),
       color: getTextColor(),
-      includeFontPadding: false,
+      includeFontPadding: true,
       ...(Platform.OS === 'android' && {
-        textBreakStrategy: 'simple' as const,
         allowFontScaling: false,
       }),
     },
@@ -2421,10 +2907,9 @@ const App: React.FC = () => {
         : Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 4),
       color: getTextColor(),
       marginVertical: Platform.OS === 'android' ? 6 : 4,
-      includeFontPadding: false,
+      includeFontPadding: true,
       textAlignVertical: 'center' as const,
       ...(Platform.OS === 'android' && {
-        textBreakStrategy: 'simple' as const,
         allowFontScaling: false,
       }),
     },
@@ -2449,7 +2934,7 @@ const App: React.FC = () => {
       fontWeight: 'bold' as const,
       color: getTextColor(),
       lineHeight: 32,
-      includeFontPadding: false,
+      includeFontPadding: true,
       textAlignVertical: 'center' as const,
       width: '100%' as const,
       flexShrink: 0,
@@ -2459,7 +2944,7 @@ const App: React.FC = () => {
       fontWeight: 'bold' as const,
       color: getTextColor(),
       lineHeight: 26,
-      includeFontPadding: false,
+      includeFontPadding: true,
       textAlignVertical: 'center' as const,
       width: '100%' as const,
       flexShrink: 0,
@@ -2469,7 +2954,7 @@ const App: React.FC = () => {
       fontWeight: 'bold' as const,
       color: getTextColor(),
       lineHeight: 22,
-      includeFontPadding: false,
+      includeFontPadding: true,
       textAlignVertical: 'center' as const,
       width: '100%' as const,
       flexShrink: 0,
@@ -2501,7 +2986,12 @@ const App: React.FC = () => {
   // 優化的 Markdown 渲染規則
   const markdownRules = useMemo(() => ({
     paragraph: (node: any, children: any, _parent: any, _styles: any) => (
-      <View key={node.key} style={{ marginVertical: Platform.OS === 'android' ? 6 : 4 }}>
+      <View key={node.key} style={{ 
+        marginVertical: Platform.OS === 'android' ? 6 : 4,
+        width: '100%',
+        flexDirection: 'row',
+        flexWrap: 'wrap'
+      }}>
         <Text 
           style={{
             fontSize: settings.fontSize,
@@ -2509,10 +2999,12 @@ const App: React.FC = () => {
               ? Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 8)
               : Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 4),
             color: getTextColor(),
-            includeFontPadding: false,
+            includeFontPadding: true,
             textAlignVertical: 'center' as const,
+            width: '100%',
+            flexShrink: 1,
+            flexWrap: 'wrap',
             ...(Platform.OS === 'android' && {
-              textBreakStrategy: 'simple' as const,
               allowFontScaling: false,
             }),
           }}
@@ -2563,7 +3055,7 @@ const App: React.FC = () => {
           styles.contentContainer,
           { 
             backgroundColor: getBackgroundColor(),
-            paddingHorizontal: 12,
+            paddingHorizontal: 16,
             flex: 1
           }
         ]}
@@ -3087,23 +3579,17 @@ const App: React.FC = () => {
             ListHeaderComponent={
               <View style={styles.novelDetailContainer}>
                 <View style={styles.coverAndInfoContainer}>
-                  <TouchableOpacity 
+                  <CachedCoverImage
+                    coverPath={novels.find(n => n.title === currentNovel)?.cover || ''}
+                    novelTitle={currentNovel || ''}
+                    style={styles.novelCover}
+                    isDarkMode={settings.theme === 'dark'}
                     onPress={() => {
                       const coverUrl = resolveCoverUrl(novels.find(n => n.title === currentNovel)?.cover || '');
                       const coverUrlWithTimestamp = `${coverUrl}?t=${Date.now()}`;
                       openLightbox(coverUrlWithTimestamp);
                     }}
-                    activeOpacity={0.8}
-                  >
-                    <Image
-                      source={{ 
-                        uri: `${resolveCoverUrl(novels.find(n => n.title === currentNovel)?.cover || '')}?t=${Date.now()}`,
-                        cache: 'reload'
-                      }}
-                      style={styles.novelCover}
-                      resizeMode="cover"
-                    />
-                  </TouchableOpacity>
+                  />
                   <View style={styles.novelInfo}>
                     <Text style={[styles.novelTitle, { color: getTextColor() }]}>
                       {currentNovel}

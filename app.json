@@ -2,7 +2,7 @@
   "expo": {
     "name": "輕小說雲境",
     "slug": "lightnovelsreader",
-    "version": "1.2.15",
+    "version": "1.2.16",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -38,7 +38,7 @@
         "WAKE_LOCK"
       ],
       "package": "com.xuerowo.lightnovelsreader",
-      "versionCode": 18,
+      "versionCode": 19,
       "softwareKeyboardLayoutMode": "pan"
     },
     "web": {
