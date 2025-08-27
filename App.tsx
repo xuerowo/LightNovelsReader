@@ -589,6 +589,8 @@ interface MarkdownImageProps {
   isDarkMode: boolean;
   backgroundColor: string;
   onImagePress?: (imageUri: string) => void;
+  novelTitle?: string;
+  chapterTitle?: string;
 }
 
 interface CachedCoverImageProps {
@@ -1137,7 +1139,7 @@ const CachedCoverImage: React.FC<CachedCoverImageProps> = React.memo(({
   );
 });
 
-const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMode, backgroundColor, onImagePress }) => {
+const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMode, backgroundColor, onImagePress, novelTitle, chapterTitle }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(false);
   const [currentImageUri, setCurrentImageUri] = useState<string>('');
@@ -1168,8 +1170,11 @@ const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMod
         // 生成圖片標識（使用URL作為圖片名稱的一部分）
         const imageName = src.split('/').pop()?.replace(/[^a-zA-Z0-9]/g, '_') || 'unknown';
         
+        // 生成章節特定的快取鍵（使用小說標題和章節標題）
+        const cacheKey = novelTitle && chapterTitle ? `${novelTitle}_${chapterTitle}` : 'current';
+        
         // 1. 先檢查本地文件緩存
-        const cachedPath = await cacheManager.getCachedImagePath('content', 'current', imageName);
+        const cachedPath = await cacheManager.getCachedImagePath('content', cacheKey, imageName);
         if (cachedPath && isMounted.current) {
           setCurrentImageUri(cachedPath);
           setIsLoading(false);
@@ -1177,7 +1182,7 @@ const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMod
         
         // 2. 嘗試從網路獲取並緩存最新圖片
         try {
-          const downloadedPath = await cacheManager.cacheImage(cleanUrl, 'content', 'current', imageName);
+          const downloadedPath = await cacheManager.cacheImage(cleanUrl, 'content', cacheKey, imageName);
           
           if (downloadedPath && isMounted.current) {
             // 網路圖片下載成功，更新顯示
@@ -1210,7 +1215,7 @@ const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMod
     };
 
     loadImage();
-  }, [cleanUrl, src, cacheManager]);
+  }, [cleanUrl, src, cacheManager, novelTitle, chapterTitle]);
 
   const imageStyles = useMemo(() => StyleSheet.create({
     container: {
@@ -1276,7 +1281,9 @@ const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMod
   return prevProps.src === nextProps.src && 
          prevProps.isDarkMode === nextProps.isDarkMode && 
          prevProps.backgroundColor === nextProps.backgroundColor &&
-         prevProps.onImagePress === nextProps.onImagePress;
+         prevProps.onImagePress === nextProps.onImagePress &&
+         prevProps.novelTitle === nextProps.novelTitle &&
+         prevProps.chapterTitle === nextProps.chapterTitle;
 });
 
 // 格式化更新消息
@@ -3021,6 +3028,8 @@ const App: React.FC = () => {
         isDarkMode={settings.theme === 'dark'} 
         backgroundColor={getBackgroundColor()}
         onImagePress={openLightbox}
+        novelTitle={currentNovel ?? undefined}
+        chapterTitle={currentNovel ? lastReadChapter[currentNovel] : undefined}
       />;
     },
     heading1: (node: any, children: any, _parent: any, _styles: any) => (
@@ -3044,7 +3053,7 @@ const App: React.FC = () => {
         </Text>
       </View>
     ),
-  }), [settings.theme, getBackgroundColor, markdownStyles, headingContainerStyles, openLightbox, settings.fontSize, settings.lineHeight, getTextColor]);
+  }), [settings.theme, getBackgroundColor, markdownStyles, headingContainerStyles, openLightbox, settings.fontSize, settings.lineHeight, getTextColor, currentNovel, lastReadChapter]);
 
   // 渲染章節內容
   const renderChapterContent = useCallback(() => {
