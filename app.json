@@ -6,7 +6,11 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
-    "platforms": ["ios", "android", "web"],
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
     "updates": {
       "fallbackToCacheTimeout": 0
     },
@@ -52,7 +56,8 @@
           "color": "#000000",
           "mode": "production"
         }
-      ]
+      ],
+      "expo-font"
     ],
     "newArchEnabled": true,
     "extra": {
