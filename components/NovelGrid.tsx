@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, ActivityIndicator } from 'react-native';
 import NovelCard from './NovelCard';
 import CustomScrollView from './CustomScrollView';
 import { Novel } from '../types/novelTypes';

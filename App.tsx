@@ -1782,6 +1782,21 @@ const App: React.FC = () => {
     }
   };
 
+  // 強制保存當前狀態的函數
+  const saveCurrentState = useCallback(async () => {
+    try {
+      const newSettings = {
+        ...settings,
+        lastReadChapter,
+        scrollPosition
+      };
+      await saveLocalData('settings', newSettings);
+      logger.log('已強制保存當前狀態');
+    } catch (error) {
+      logger.error('強制保存狀態失敗:', error);
+    }
+  }, [settings, lastReadChapter, scrollPosition]);
+
   const fetchChapterContent = async (chapter: Chapter) => {
     if (!currentNovel) return;
 
@@ -2019,21 +2034,6 @@ const App: React.FC = () => {
     },
     [scrollPosition, settings, debouncedScrollHandler]
   );
-
-  // 強制保存當前狀態的函數
-  const saveCurrentState = useCallback(async () => {
-    try {
-      const newSettings = {
-        ...settings,
-        lastReadChapter,
-        scrollPosition
-      };
-      await saveLocalData('settings', newSettings);
-      logger.log('已強制保存當前狀態');
-    } catch (error) {
-      logger.error('強制保存狀態失敗:', error);
-    }
-  }, [settings, lastReadChapter, scrollPosition]);
 
   const handleCheckUpdate = async () => {
     try {

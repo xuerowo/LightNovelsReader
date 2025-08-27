@@ -41,7 +41,6 @@ const CustomScrollView = React.forwardRef<ScrollView, CustomScrollViewProps>(
     // 狀態
     const [contentHeight, setContentHeight] = useState(0);
     const [containerHeight, setContainerHeight] = useState(0);
-    const [scrollY, setScrollY] = useState(0);
     const [showIndicator, setShowIndicator] = useState(false);
     
     // 自動隱藏計時器
@@ -90,7 +89,6 @@ const CustomScrollView = React.forwardRef<ScrollView, CustomScrollViewProps>(
     const handleScroll = useCallback(
       (event: NativeSyntheticEvent<NativeScrollEvent>) => {
         const currentScrollY = event.nativeEvent.contentOffset.y;
-        setScrollY(currentScrollY);
 
         // 只有當內容可滾動時才顯示指示器
         if (contentHeight > containerHeight) {
