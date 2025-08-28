@@ -2498,8 +2498,8 @@ const App: React.FC = () => {
     return [...novels].sort((a, b) => {
       switch (currentSort) {
         case 'lastUpdated':
-          const aLastUpdated = a.chapters[a.chapters.length - 1]?.lastUpdated || '';
-          const bLastUpdated = b.chapters[b.chapters.length - 1]?.lastUpdated || '';
+          const aLastUpdated = a.lastUpdated || '';
+          const bLastUpdated = b.lastUpdated || '';
           return new Date(bLastUpdated).getTime() - new Date(aLastUpdated).getTime();
         case 'chapterCount':
           return b.chapters.length - a.chapters.length;
