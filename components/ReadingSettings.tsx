@@ -9,8 +9,10 @@ interface ReadingSettingsProps {
   isDarkMode: boolean;
   fontSize: number;
   lineHeight: number;
+  contentWidth: number;
   onFontSizeChange: (size: number) => void;
   onLineHeightChange: (height: number) => void;
+  onContentWidthChange: (width: number) => void;
   onReset: () => void;
   theme: 'light' | 'dark' | 'eyeComfort';
   onThemeChange: (theme: 'light' | 'dark' | 'eyeComfort') => void;
@@ -18,6 +20,7 @@ interface ReadingSettingsProps {
 
 export const DEFAULT_FONT_SIZE = 18;
 export const DEFAULT_LINE_HEIGHT = 1.5;
+export const DEFAULT_CONTENT_WIDTH = 100;
 
 const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
   visible,
@@ -25,8 +28,10 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
   isDarkMode,
   fontSize,
   lineHeight,
+  contentWidth,
   onFontSizeChange,
   onLineHeightChange,
+  onContentWidthChange,
   onReset,
   theme,
   onThemeChange
@@ -36,10 +41,12 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
   // 本地狀態管理，提供即時視覺回饋
   const [localFontSize, setLocalFontSize] = useState(fontSize);
   const [localLineHeight, setLocalLineHeight] = useState(lineHeight);
+  const [localContentWidth, setLocalContentWidth] = useState(contentWidth);
   
   // 防抖計時器
   const fontSizeTimeoutRef = useRef<number | null>(null);
   const lineHeightTimeoutRef = useRef<number | null>(null);
+  const contentWidthTimeoutRef = useRef<number | null>(null);
   
   // 同步外部狀態到本地狀態
   useEffect(() => {
@@ -49,6 +56,10 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
   useEffect(() => {
     setLocalLineHeight(lineHeight);
   }, [lineHeight]);
+  
+  useEffect(() => {
+    setLocalContentWidth(contentWidth);
+  }, [contentWidth]);
   
   // 動畫效果
   useEffect(() => {
@@ -67,6 +78,9 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
       }
       if (lineHeightTimeoutRef.current) {
         clearTimeout(lineHeightTimeoutRef.current);
+      }
+      if (contentWidthTimeoutRef.current) {
+        clearTimeout(contentWidthTimeoutRef.current);
       }
     };
   }, []);
@@ -96,6 +110,19 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
       onLineHeightChange(value);
     }, 300) as any;
   }, [onLineHeightChange]);
+  
+  // 防抖處理內容寬度變更
+  const handleContentWidthChange = useCallback((value: number) => {
+    setLocalContentWidth(value);
+    
+    if (contentWidthTimeoutRef.current) {
+      clearTimeout(contentWidthTimeoutRef.current);
+    }
+    
+    contentWidthTimeoutRef.current = setTimeout(() => {
+      onContentWidthChange(value);
+    }, 300) as any;
+  }, [onContentWidthChange]);
 
   if (!visible) return null;
 
@@ -207,6 +234,27 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
           </View>
         </View>
 
+        <View style={styles.settingItem}>
+          <Text style={[styles.settingLabel, { color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a' }]}>
+            內容寬度
+          </Text>
+          <View style={styles.sliderContainer}>
+            <MaterialIcons name="format-align-center" size={20} color={theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a'} />
+            <Slider
+              style={styles.slider}
+              minimumValue={60}
+              maximumValue={100}
+              value={localContentWidth}
+              onValueChange={handleContentWidthChange}
+              minimumTrackTintColor="#2196F3"
+              maximumTrackTintColor={theme === 'light' ? '#cccccc' : theme === 'dark' ? '#666666' : '#cccccc'}
+            />
+            <Text style={[styles.valueText, { color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a' }]}>
+              {Math.round(localContentWidth)}%
+            </Text>
+          </View>
+        </View>
+
         <TouchableOpacity style={styles.resetButton} onPress={onReset}>
           <Text style={styles.resetButtonText}>重置設定</Text>
         </TouchableOpacity>
@@ -219,6 +267,7 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
     prevProps.visible === nextProps.visible &&
     prevProps.fontSize === nextProps.fontSize &&
     prevProps.lineHeight === nextProps.lineHeight &&
+    prevProps.contentWidth === nextProps.contentWidth &&
     prevProps.theme === nextProps.theme &&
     prevProps.isDarkMode === nextProps.isDarkMode
   );

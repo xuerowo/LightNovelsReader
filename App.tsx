@@ -39,7 +39,8 @@ import { MaterialIcons } from '@expo/vector-icons';
 import Markdown from 'react-native-markdown-display';
 import ReadingSettings, { 
   DEFAULT_FONT_SIZE, 
-  DEFAULT_LINE_HEIGHT 
+  DEFAULT_LINE_HEIGHT,
+  DEFAULT_CONTENT_WIDTH 
 } from './components/ReadingSettings';
 import SearchBar from './components/SearchBar';
 import SortSelector, { SortOption } from './components/SortSelector';
@@ -556,6 +557,7 @@ interface Settings {
   fontSize: number;
   lineHeight: number;
   theme: 'light' | 'dark' | 'eyeComfort';
+  contentWidth: number;
 }
 
 interface ScrollPositions {
@@ -1392,6 +1394,7 @@ const App: React.FC = () => {
     fontSize: 18,
     lineHeight: 1.5,
     theme: 'light',
+    contentWidth: DEFAULT_CONTENT_WIDTH,
   });
   const [isAppReady, setIsAppReady] = useState(false);
   const [filteredNovels, setFilteredNovels] = useState<Novel[]>([]);
@@ -2348,6 +2351,27 @@ const App: React.FC = () => {
     });
   }, []);
 
+  const handleContentWidthChange = useCallback((newContentWidth: number) => {
+    setSettings(prev => {
+      const updatedSettings = {
+        ...prev,
+        contentWidth: newContentWidth
+      };
+      
+      // 清除之前的防抖計時器
+      if (saveSettingsTimeoutRef.current) {
+        clearTimeout(saveSettingsTimeoutRef.current);
+      }
+      
+      // 設定防抖保存，300ms 後執行
+      saveSettingsTimeoutRef.current = setTimeout(() => {
+        saveSettings(updatedSettings);
+      }, 300) as unknown as number;
+      
+      return updatedSettings;
+    });
+  }, []);
+
   // 保留舊的函數以支援重置等操作
   const handleSettingsChange = useCallback((newFontSize: number, newLineHeight: number) => {
     setSettings(prev => {
@@ -2381,7 +2405,8 @@ const App: React.FC = () => {
       const resetSettings = {
         ...prev,
         fontSize: DEFAULT_FONT_SIZE,
-        lineHeight: DEFAULT_LINE_HEIGHT
+        lineHeight: DEFAULT_LINE_HEIGHT,
+        contentWidth: DEFAULT_CONTENT_WIDTH
       };
       
       // 重置設定立即保存，不使用防抖
@@ -2896,13 +2921,14 @@ const App: React.FC = () => {
   // 預編譯的 Markdown 樣式，避免每次渲染都重新計算
   const markdownStyles = useMemo(() => ({
     body: {
-      ...styles.content,
       fontSize: settings.fontSize,
       lineHeight: Platform.OS === 'android' 
         ? Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 6)
         : Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 4),
       color: getTextColor(),
+      paddingVertical: 8,
       includeFontPadding: true,
+      textAlignVertical: 'top' as const,
       ...(Platform.OS === 'android' && {
         allowFontScaling: false,
       }),
@@ -2993,32 +3019,24 @@ const App: React.FC = () => {
   // 優化的 Markdown 渲染規則
   const markdownRules = useMemo(() => ({
     paragraph: (node: any, children: any, _parent: any, _styles: any) => (
-      <View key={node.key} style={{ 
-        marginVertical: Platform.OS === 'android' ? 6 : 4,
-        width: '100%',
-        flexDirection: 'row',
-        flexWrap: 'wrap'
-      }}>
-        <Text 
-          style={{
-            fontSize: settings.fontSize,
-            lineHeight: Platform.OS === 'android' 
-              ? Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 8)
-              : Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 4),
-            color: getTextColor(),
-            includeFontPadding: true,
-            textAlignVertical: 'center' as const,
-            width: '100%',
-            flexShrink: 1,
-            flexWrap: 'wrap',
-            ...(Platform.OS === 'android' && {
-              allowFontScaling: false,
-            }),
-          }}
-        >
-          {children}
-        </Text>
-      </View>
+      <Text 
+        key={node.key}
+        style={{
+          fontSize: settings.fontSize,
+          lineHeight: Platform.OS === 'android' 
+            ? Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 8)
+            : Math.max(settings.fontSize * settings.lineHeight, settings.fontSize + 4),
+          color: getTextColor(),
+          marginVertical: Platform.OS === 'android' ? 6 : 4,
+          includeFontPadding: true,
+          textAlignVertical: 'center' as const,
+          ...(Platform.OS === 'android' && {
+            allowFontScaling: false,
+          }),
+        }}
+      >
+        {children}
+      </Text>
     ),
     image: (node: any, _children: any, _parent: any, _styles: any) => {
       const { src } = node.attributes;
@@ -3064,10 +3082,14 @@ const App: React.FC = () => {
           styles.contentContainer,
           { 
             backgroundColor: getBackgroundColor(),
-            paddingHorizontal: 16,
             flex: 1
           }
         ]}
+        contentContainerStyle={{
+          width: `${settings.contentWidth}%`,
+          alignSelf: 'center',
+          paddingHorizontal: settings.contentWidth === 100 ? 8 : 16,
+        }}
         onScroll={(event) => {
           if (currentNovel && lastReadChapter[currentNovel]) {
             handleScroll(
@@ -3092,7 +3114,7 @@ const App: React.FC = () => {
       >
         <Markdown 
           style={markdownStyles as any}
-          mergeStyle={true}
+          mergeStyle={false}
           rules={markdownRules}
         >
           {currentContent}
@@ -3106,7 +3128,7 @@ const App: React.FC = () => {
         </View>
       </CustomScrollView>
     );
-  }, [currentContent, markdownStyles, markdownRules, getBackgroundColor, getTextColor, handleScroll, refreshingContent, onRefreshContent, contentScrollViewRef, styles]);
+  }, [currentContent, markdownStyles, markdownRules, getBackgroundColor, getTextColor, handleScroll, refreshingContent, onRefreshContent, contentScrollViewRef, styles, settings.contentWidth]);
 
   const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false);
 
@@ -3499,8 +3521,10 @@ const App: React.FC = () => {
             isDarkMode={settings.isDarkMode}
             fontSize={settings.fontSize}
             lineHeight={settings.lineHeight}
+            contentWidth={settings.contentWidth}
             onFontSizeChange={handleFontSizeChange}
             onLineHeightChange={handleLineHeightChange}
+            onContentWidthChange={handleContentWidthChange}
             onReset={handleResetSettings} 
             theme={settings.theme}
             onThemeChange={handleThemeChange}
