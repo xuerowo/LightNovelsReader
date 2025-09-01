@@ -113,14 +113,19 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
   
   // 防抖處理內容寬度變更
   const handleContentWidthChange = useCallback((value: number) => {
-    setLocalContentWidth(value);
+    // 驗證數值有效性
+    const validatedValue = (!isNaN(value) && isFinite(value) && value >= 60 && value <= 100) 
+      ? value 
+      : DEFAULT_CONTENT_WIDTH;
+    
+    setLocalContentWidth(validatedValue);
     
     if (contentWidthTimeoutRef.current) {
       clearTimeout(contentWidthTimeoutRef.current);
     }
     
     contentWidthTimeoutRef.current = setTimeout(() => {
-      onContentWidthChange(value);
+      onContentWidthChange(validatedValue);
     }, 300) as any;
   }, [onContentWidthChange]);
 
@@ -244,13 +249,13 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
               style={styles.slider}
               minimumValue={60}
               maximumValue={100}
-              value={localContentWidth}
+              value={isNaN(localContentWidth) || !isFinite(localContentWidth) ? DEFAULT_CONTENT_WIDTH : localContentWidth}
               onValueChange={handleContentWidthChange}
               minimumTrackTintColor="#2196F3"
               maximumTrackTintColor={theme === 'light' ? '#cccccc' : theme === 'dark' ? '#666666' : '#cccccc'}
             />
             <Text style={[styles.valueText, { color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a' }]}>
-              {Math.round(localContentWidth)}%
+              {Math.round(isNaN(localContentWidth) || !isFinite(localContentWidth) ? DEFAULT_CONTENT_WIDTH : localContentWidth)}%
             </Text>
           </View>
         </View>

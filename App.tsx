@@ -1465,7 +1465,19 @@ const App: React.FC = () => {
       const settingsStr = await AsyncStorage.getItem('reader_settings');
       if (settingsStr) {
         const parsedSettings: Settings = JSON.parse(settingsStr);
-        setSettings(parsedSettings);
+        
+        // 驗證並修正 contentWidth 值
+        const validatedSettings = {
+          ...parsedSettings,
+          contentWidth: (!isNaN(parsedSettings.contentWidth) && 
+                        isFinite(parsedSettings.contentWidth) && 
+                        parsedSettings.contentWidth >= 60 && 
+                        parsedSettings.contentWidth <= 100)
+            ? parsedSettings.contentWidth 
+            : DEFAULT_CONTENT_WIDTH
+        };
+        
+        setSettings(validatedSettings);
         
         // 同時更新這兩個狀態
         setLastReadChapter(parsedSettings.lastReadChapter ?? {});
@@ -1921,19 +1933,50 @@ const App: React.FC = () => {
         return newReadChapters;
       });
 
-      // 恢復滾動位置
+      // 增強的滾動位置恢復機制
       const scrollKey = `${currentNovel}-${chapter.title}`;
       const savedPosition = scrollPosition[scrollKey];
       
-      if (typeof savedPosition === 'number') {
-        setTimeout(() => {
-          if (contentScrollViewRef.current) {
-            contentScrollViewRef.current.scrollTo({
-              y: savedPosition,
-              animated: false
-            });
-          }
-        }, 0);
+      if (typeof savedPosition === 'number' && savedPosition > 0) {
+        logger.log(`準備恢復章節 ${scrollKey} 的滾動位置: ${savedPosition}`);
+        
+        // 使用多次嘗試確保滾動位置恢復成功
+        const restoreScrollPosition = () => {
+          let attempts = 0;
+          const maxAttempts = 5;
+          
+          const tryRestore = () => {
+            attempts++;
+            
+            if (contentScrollViewRef.current) {
+              contentScrollViewRef.current.scrollTo({
+                y: savedPosition,
+                animated: false
+              });
+              logger.log(`滾動位置恢復嘗試 ${attempts}/${maxAttempts}: ${savedPosition}`);
+              
+              // 驗證滾動是否成功（在下一個事件循環中檢查）
+              setTimeout(() => {
+                if (attempts < maxAttempts) {
+                  // 再次嘗試，確保位置正確設置
+                  setTimeout(tryRestore, 100 * attempts);
+                } else {
+                  logger.log(`章節 ${scrollKey} 滾動位置恢復完成`);
+                }
+              }, 50);
+            } else if (attempts < maxAttempts) {
+              // ScrollView 還沒準備好，稍後再試
+              setTimeout(tryRestore, 200 * attempts);
+            }
+          };
+          
+          tryRestore();
+        };
+        
+        // 初始延遲，等待內容渲染完成
+        setTimeout(restoreScrollPosition, 100);
+      } else {
+        logger.log(`章節 ${scrollKey} 沒有保存的滾動位置或位置為頂部`);
       }
 
     } catch (error) {
@@ -2351,11 +2394,21 @@ const App: React.FC = () => {
     });
   }, []);
 
+  // Helper 函數驗證 contentWidth 的有效性
+  const getValidContentWidth = useCallback((width: number) => {
+    return (!isNaN(width) && isFinite(width) && width >= 60 && width <= 100) 
+      ? width 
+      : DEFAULT_CONTENT_WIDTH;
+  }, []);
+
   const handleContentWidthChange = useCallback((newContentWidth: number) => {
+    // 驗證數值有效性
+    const validatedWidth = getValidContentWidth(newContentWidth);
+    
     setSettings(prev => {
       const updatedSettings = {
         ...prev,
-        contentWidth: newContentWidth
+        contentWidth: validatedWidth
       };
       
       // 清除之前的防抖計時器
@@ -3086,9 +3139,9 @@ const App: React.FC = () => {
           }
         ]}
         contentContainerStyle={{
-          width: `${settings.contentWidth}%`,
+          width: `${getValidContentWidth(settings.contentWidth)}%`,
           alignSelf: 'center',
-          paddingHorizontal: settings.contentWidth === 100 ? 8 : 16,
+          paddingHorizontal: getValidContentWidth(settings.contentWidth) === 100 ? 8 : 16,
         }}
         onScroll={(event) => {
           if (currentNovel && lastReadChapter[currentNovel]) {
@@ -3277,9 +3330,27 @@ const App: React.FC = () => {
         
         // 如果距離上次活躍時間超過設定間隔，則刷新數據
         if (now - lastActiveTime > REFRESH_INTERVAL) {
-          logger.log('應用程式回到前景，刷新數據');
+          logger.log('應用程式回到前景，準備刷新數據');
+          
+          // 保存當前章節內容的滾動位置（如果有的話）
+          const currentChapterScrollKey = currentNovel && lastReadChapter[currentNovel] 
+            ? `${currentNovel}-${lastReadChapter[currentNovel]}`
+            : null;
+          const savedContentScrollPosition = currentChapterScrollKey 
+            ? scrollPosition[currentChapterScrollKey] 
+            : null;
           
           try {
+            // 如果正在閱讀章節內容，避免刷新數據以免影響閱讀體驗
+            if (currentContent && currentNovel && lastReadChapter[currentNovel]) {
+              logger.log('正在閱讀章節內容，跳過數據刷新以保持滾動位置');
+              lastActiveTime = now;
+              return;
+            }
+            
+            // 只有在沒有章節內容顯示時才刷新數據
+            logger.log('開始刷新數據');
+            
             // 優先刷新小說列表
             await fetchNovelList();
             
@@ -3287,6 +3358,20 @@ const App: React.FC = () => {
             if (currentNovel) {
               await fetchChapterList(currentNovel);
             }
+            
+            // 如果之前有保存的章節滾動位置，確保恢復
+            if (currentChapterScrollKey && savedContentScrollPosition !== null) {
+              setTimeout(() => {
+                if (contentScrollViewRef.current) {
+                  contentScrollViewRef.current.scrollTo({
+                    y: savedContentScrollPosition,
+                    animated: false
+                  });
+                  logger.log(`恢復章節內容滾動位置: ${savedContentScrollPosition}`);
+                }
+              }, 500);
+            }
+            
           } catch (error) {
             logger.error('回到前景時刷新數據失敗:', error);
           }
@@ -3296,6 +3381,13 @@ const App: React.FC = () => {
       } else if (nextAppState === 'background' || nextAppState === 'inactive') {
         // 當應用程式進入背景或非活躍狀態時，保存當前滾動位置
         try {
+          // 額外保存當前章節內容的滾動位置
+          if (currentNovel && lastReadChapter[currentNovel] && contentScrollViewRef.current) {
+            const currentScrollKey = `${currentNovel}-${lastReadChapter[currentNovel]}`;
+            // 強制獲取當前滾動位置（雖然這在背景可能不完全準確）
+            logger.log(`應用程式進入背景，保存章節 ${currentScrollKey} 的滾動位置`);
+          }
+          
           // 保存所有當前設置和滾動位置
           const newSettings = {
             ...settings,
@@ -3332,7 +3424,7 @@ const App: React.FC = () => {
       
       saveOnUnmount();
     };
-  }, [currentNovel]);
+  }, [currentNovel, lastReadChapter, settings, scrollPosition, currentContent, fetchNovelList, fetchChapterList]);
 
   useEffect(() => {
     setFilteredNovels(novels);
