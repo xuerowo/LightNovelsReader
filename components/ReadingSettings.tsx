@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Animated, TextInput } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import Slider from '@react-native-community/slider';
 
 interface ReadingSettingsProps {
   visible: boolean;
@@ -18,7 +17,7 @@ interface ReadingSettingsProps {
   onThemeChange: (theme: 'light' | 'dark' | 'eyeComfort') => void;
 }
 
-export const DEFAULT_FONT_SIZE = 18;
+export const DEFAULT_FONT_SIZE = 18.1;
 export const DEFAULT_LINE_HEIGHT = 1.5;
 export const DEFAULT_CONTENT_WIDTH = 100;
 
@@ -43,6 +42,11 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
   const [localLineHeight, setLocalLineHeight] = useState(lineHeight);
   const [localContentWidth, setLocalContentWidth] = useState(contentWidth);
   
+  // 輸入框文字狀態
+  const [fontSizeText, setFontSizeText] = useState(fontSize.toString());
+  const [lineHeightText, setLineHeightText] = useState(lineHeight.toString());
+  const [contentWidthText, setContentWidthText] = useState(contentWidth.toString());
+  
   // 防抖計時器
   const fontSizeTimeoutRef = useRef<number | null>(null);
   const lineHeightTimeoutRef = useRef<number | null>(null);
@@ -51,14 +55,17 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
   // 同步外部狀態到本地狀態
   useEffect(() => {
     setLocalFontSize(fontSize);
+    setFontSizeText(fontSize.toString());
   }, [fontSize]);
   
   useEffect(() => {
     setLocalLineHeight(lineHeight);
+    setLineHeightText(lineHeight.toString());
   }, [lineHeight]);
   
   useEffect(() => {
     setLocalContentWidth(contentWidth);
+    setContentWidthText(contentWidth.toString());
   }, [contentWidth]);
   
   // 動畫效果
@@ -85,39 +92,62 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
     };
   }, []);
   
+  // 數值驗證和轉換工具函數
+  const validateAndParseNumber = useCallback((text: string, min: number, max: number, defaultValue: number): number => {
+    if (text.trim() === '') {
+      return defaultValue;
+    }
+    const num = parseFloat(text);
+    if (isNaN(num) || !isFinite(num)) {
+      return defaultValue;
+    }
+    return Math.max(min, Math.min(max, num));
+  }, []);
+  
+  const formatNumberText = useCallback((value: number, decimals: number): string => {
+    return value.toFixed(decimals).replace(/\.?0+$/, '');
+  }, []);
+  
   // 防抖處理字體大小變更
-  const handleFontSizeChange = useCallback((value: number) => {
-    setLocalFontSize(value);
+  const handleFontSizeTextChange = useCallback((text: string) => {
+    setFontSizeText(text);
+    const validatedValue = validateAndParseNumber(text, 12, 30, DEFAULT_FONT_SIZE);
+    setLocalFontSize(validatedValue);
     
     if (fontSizeTimeoutRef.current) {
       clearTimeout(fontSizeTimeoutRef.current);
     }
     
     fontSizeTimeoutRef.current = setTimeout(() => {
-      onFontSizeChange(value);
+      onFontSizeChange(validatedValue);
+      if (text.trim() !== '') {
+        setFontSizeText(formatNumberText(validatedValue, 1));
+      }
     }, 300) as any;
-  }, [onFontSizeChange]);
+  }, [onFontSizeChange, validateAndParseNumber, formatNumberText]);
   
   // 防抖處理行距變更
-  const handleLineHeightChange = useCallback((value: number) => {
-    setLocalLineHeight(value);
+  const handleLineHeightTextChange = useCallback((text: string) => {
+    setLineHeightText(text);
+    const validatedValue = validateAndParseNumber(text, 1.0, 3.0, DEFAULT_LINE_HEIGHT);
+    setLocalLineHeight(validatedValue);
     
     if (lineHeightTimeoutRef.current) {
       clearTimeout(lineHeightTimeoutRef.current);
     }
     
     lineHeightTimeoutRef.current = setTimeout(() => {
-      onLineHeightChange(value);
+      onLineHeightChange(validatedValue);
+      if (text.trim() !== '') {
+        setLineHeightText(formatNumberText(validatedValue, 2));
+      }
     }, 300) as any;
-  }, [onLineHeightChange]);
+  }, [onLineHeightChange, validateAndParseNumber, formatNumberText]);
   
   // 防抖處理內容寬度變更
-  const handleContentWidthChange = useCallback((value: number) => {
-    // 驗證數值有效性
-    const validatedValue = (!isNaN(value) && isFinite(value) && value >= 60 && value <= 100) 
-      ? value 
-      : DEFAULT_CONTENT_WIDTH;
-    
+  const handleContentWidthTextChange = useCallback((text: string) => {
+    setContentWidthText(text);
+    const validatedValue = validateAndParseNumber(text, 60, 100, DEFAULT_CONTENT_WIDTH);
     setLocalContentWidth(validatedValue);
     
     if (contentWidthTimeoutRef.current) {
@@ -126,8 +156,11 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
     
     contentWidthTimeoutRef.current = setTimeout(() => {
       onContentWidthChange(validatedValue);
+      if (text.trim() !== '') {
+        setContentWidthText(formatNumberText(validatedValue, 1));
+      }
     }, 300) as any;
-  }, [onContentWidthChange]);
+  }, [onContentWidthChange, validateAndParseNumber, formatNumberText]);
 
   if (!visible) return null;
 
@@ -199,63 +232,81 @@ const ReadingSettings: React.FC<ReadingSettingsProps> = React.memo(({
         
         <View style={styles.settingItem}>
           <Text style={[styles.settingLabel, { color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a' }]}>
-            字體大小
+            字體大小 (12-30)
           </Text>
-          <View style={styles.sliderContainer}>
+          <View style={styles.inputContainer}>
             <MaterialIcons name="format-size" size={16} color={theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a'} />
-            <Slider
-              style={styles.slider}
-              minimumValue={14}
-              maximumValue={24}
-              value={localFontSize}
-              onValueChange={handleFontSizeChange}
-              minimumTrackTintColor="#2196F3"
-              maximumTrackTintColor={theme === 'light' ? '#cccccc' : theme === 'dark' ? '#666666' : '#cccccc'}
+            <TextInput
+              style={[
+                styles.textInput,
+                {
+                  color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a',
+                  borderColor: theme === 'light' ? '#cccccc' : theme === 'dark' ? '#666666' : '#cccccc',
+                  backgroundColor: theme === 'light' ? '#f5f5f5' : theme === 'dark' ? '#444444' : '#f0f0f0'
+                }
+              ]}
+              value={fontSizeText}
+              onChangeText={handleFontSizeTextChange}
+              keyboardType="numeric"
+              placeholder={DEFAULT_FONT_SIZE.toString()}
+              placeholderTextColor={theme === 'light' ? '#999999' : theme === 'dark' ? '#aaaaaa' : '#888888'}
             />
-            <Text style={[styles.valueText, { color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a' }]}>
-              {Math.round(localFontSize)}
+            <Text style={[styles.unitText, { color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a' }]}>
+              px
             </Text>
           </View>
         </View>
 
         <View style={styles.settingItem}>
           <Text style={[styles.settingLabel, { color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a' }]}>
-            行距
+            行距 (1.0-3.0)
           </Text>
-          <View style={styles.sliderContainer}>
+          <View style={styles.inputContainer}>
             <MaterialIcons name="format-line-spacing" size={20} color={theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a'} />
-            <Slider
-              style={styles.slider}
-              minimumValue={1.5}
-              maximumValue={2.0}
-              value={localLineHeight}
-              onValueChange={handleLineHeightChange}
-              minimumTrackTintColor="#2196F3"
-              maximumTrackTintColor={theme === 'light' ? '#cccccc' : theme === 'dark' ? '#666666' : '#cccccc'}
+            <TextInput
+              style={[
+                styles.textInput,
+                {
+                  color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a',
+                  borderColor: theme === 'light' ? '#cccccc' : theme === 'dark' ? '#666666' : '#cccccc',
+                  backgroundColor: theme === 'light' ? '#f5f5f5' : theme === 'dark' ? '#444444' : '#f0f0f0'
+                }
+              ]}
+              value={lineHeightText}
+              onChangeText={handleLineHeightTextChange}
+              keyboardType="numeric"
+              placeholder={DEFAULT_LINE_HEIGHT.toString()}
+              placeholderTextColor={theme === 'light' ? '#999999' : theme === 'dark' ? '#aaaaaa' : '#888888'}
             />
-            <Text style={[styles.valueText, { color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a' }]}>
-              {localLineHeight.toFixed(1)}
+            <Text style={[styles.unitText, { color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a' }]}>
+              倍
             </Text>
           </View>
         </View>
 
         <View style={styles.settingItem}>
           <Text style={[styles.settingLabel, { color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a' }]}>
-            內容寬度
+            內容寬度 (60-100)
           </Text>
-          <View style={styles.sliderContainer}>
+          <View style={styles.inputContainer}>
             <MaterialIcons name="format-align-center" size={20} color={theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a'} />
-            <Slider
-              style={styles.slider}
-              minimumValue={60}
-              maximumValue={100}
-              value={isNaN(localContentWidth) || !isFinite(localContentWidth) ? DEFAULT_CONTENT_WIDTH : localContentWidth}
-              onValueChange={handleContentWidthChange}
-              minimumTrackTintColor="#2196F3"
-              maximumTrackTintColor={theme === 'light' ? '#cccccc' : theme === 'dark' ? '#666666' : '#cccccc'}
+            <TextInput
+              style={[
+                styles.textInput,
+                {
+                  color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a',
+                  borderColor: theme === 'light' ? '#cccccc' : theme === 'dark' ? '#666666' : '#cccccc',
+                  backgroundColor: theme === 'light' ? '#f5f5f5' : theme === 'dark' ? '#444444' : '#f0f0f0'
+                }
+              ]}
+              value={contentWidthText}
+              onChangeText={handleContentWidthTextChange}
+              keyboardType="numeric"
+              placeholder={DEFAULT_CONTENT_WIDTH.toString()}
+              placeholderTextColor={theme === 'light' ? '#999999' : theme === 'dark' ? '#aaaaaa' : '#888888'}
             />
-            <Text style={[styles.valueText, { color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a' }]}>
-              {Math.round(isNaN(localContentWidth) || !isFinite(localContentWidth) ? DEFAULT_CONTENT_WIDTH : localContentWidth)}%
+            <Text style={[styles.unitText, { color: theme === 'light' ? '#000000' : theme === 'dark' ? '#ffffff' : '#4a4a4a' }]}>
+              %
             </Text>
           </View>
         </View>
@@ -312,17 +363,28 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginBottom: 10,
   },
-  sliderContainer: {
+  inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
   },
-  slider: {
+  textInput: {
     flex: 1,
+    height: 44,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     marginHorizontal: 10,
+    fontSize: 16,
+    lineHeight: 20,
+    textAlign: 'center',
+    textAlignVertical: 'center',
   },
-  valueText: {
+  unitText: {
     minWidth: 30,
-    textAlign: 'right',
+    textAlign: 'left',
+    fontSize: 14,
+    fontWeight: '500',
   },
   resetButton: {
     backgroundColor: '#2196F3',
