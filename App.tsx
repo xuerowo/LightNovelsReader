@@ -25,7 +25,7 @@ import {
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image as ExpoImage } from 'expo-image';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import NovelGrid from './components/NovelGrid';
 import CustomScrollView from './components/CustomScrollView';
 import * as Notifications from 'expo-notifications';

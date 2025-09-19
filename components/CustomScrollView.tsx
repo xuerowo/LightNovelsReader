@@ -62,7 +62,7 @@ const CustomScrollView = React.forwardRef<ScrollView, CustomScrollViewProps>(
         Animated.timing(scrollIndicatorOpacity, {
           toValue: 0.8,
           duration: 200,
-          useNativeDriver: false,
+          useNativeDriver: true,
         }).start();
       }
 
@@ -77,7 +77,7 @@ const CustomScrollView = React.forwardRef<ScrollView, CustomScrollViewProps>(
           Animated.timing(scrollIndicatorOpacity, {
             toValue: 0,
             duration: 300,
-            useNativeDriver: false,
+            useNativeDriver: true,
           }).start(() => {
             setShowIndicator(false);
           });
