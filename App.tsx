@@ -48,248 +48,10 @@ import { Novel, Chapter } from './types/novelTypes';
 import * as diff from 'diff';
 import logger from './utils/logger';
 import { resolveChapterUrl, resolveImageUrl, resolveCoverUrl } from './utils/pathUtils';
+import ImageCacheService from './services/ImageCacheService';
+import CachedImage from './components/CachedImage';
 
-// 圖片緩存管理類
-class ImageCacheManager {
-  private static instance: ImageCacheManager;
-  private cacheDir: string;
-  private metadataKey = 'image_cache_metadata';
 
-  private constructor() {
-    this.cacheDir = `${FileSystem.documentDirectory}images/`;
-  }
-
-  static getInstance(): ImageCacheManager {
-    if (!ImageCacheManager.instance) {
-      ImageCacheManager.instance = new ImageCacheManager();
-    }
-    return ImageCacheManager.instance;
-  }
-
-  // 確保緩存目錄存在
-  private async ensureCacheDir(): Promise<void> {
-    try {
-      const dirInfo = await FileSystem.getInfoAsync(this.cacheDir);
-      if (!dirInfo.exists) {
-        await FileSystem.makeDirectoryAsync(this.cacheDir, { intermediates: true });
-      }
-    } catch (error) {
-      logger.error('創建緩存目錄失敗:', error);
-    }
-  }
-
-  // 生成緩存文件路徑
-  private getCacheFilePath(type: 'cover' | 'content', novelTitle: string, imageName: string = ''): string {
-    const sanitizedTitle = novelTitle.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '_');
-    const sanitizedImageName = imageName.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '_');
-    
-    if (type === 'cover') {
-      return `${this.cacheDir}covers/${sanitizedTitle}_cover.jpg`;
-    } else {
-      return `${this.cacheDir}content/${sanitizedTitle}_${sanitizedImageName}.jpg`;
-    }
-  }
-
-  // 獲取緩存元數據
-  private async getCacheMetadata(): Promise<Record<string, { path: string; timestamp: number; url: string }>> {
-    try {
-      const data = await AsyncStorage.getItem(this.metadataKey);
-      return data ? JSON.parse(data) : {};
-    } catch (error) {
-      logger.error('讀取緩存元數據失敗:', error);
-      return {};
-    }
-  }
-
-  // 保存緩存元數據
-  private async saveCacheMetadata(metadata: Record<string, { path: string; timestamp: number; url: string }>): Promise<void> {
-    try {
-      await AsyncStorage.setItem(this.metadataKey, JSON.stringify(metadata));
-    } catch (error) {
-      logger.error('保存緩存元數據失敗:', error);
-    }
-  }
-
-  // 下載並緩存圖片
-  async cacheImage(imageUrl: string, type: 'cover' | 'content', novelTitle: string, imageName: string = ''): Promise<string | null> {
-    try {
-      await this.ensureCacheDir();
-      
-      const filePath = this.getCacheFilePath(type, novelTitle, imageName);
-      const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
-      
-      // 確保子目錄存在
-      const dirInfo = await FileSystem.getInfoAsync(dirPath);
-      if (!dirInfo.exists) {
-        await FileSystem.makeDirectoryAsync(dirPath, { intermediates: true });
-      }
-
-      // 下載圖片
-      const downloadResult = await FileSystem.downloadAsync(imageUrl, filePath);
-      
-      if (downloadResult.status === 200) {
-        // 更新元數據
-        const metadata = await this.getCacheMetadata();
-        const cacheKey = `${type}_${novelTitle}_${imageName}`;
-        metadata[cacheKey] = {
-          path: filePath,
-          timestamp: Date.now(),
-          url: imageUrl
-        };
-        await this.saveCacheMetadata(metadata);
-        
-        return filePath;
-      }
-      
-      return null;
-    } catch (error) {
-      logger.error('緩存圖片失敗:', error);
-      return null;
-    }
-  }
-
-  // 獲取緩存的圖片路徑
-  async getCachedImagePath(type: 'cover' | 'content', novelTitle: string, imageName: string = ''): Promise<string | null> {
-    try {
-      const metadata = await this.getCacheMetadata();
-      const cacheKey = `${type}_${novelTitle}_${imageName}`;
-      const cacheInfo = metadata[cacheKey];
-      
-      if (cacheInfo && cacheInfo.path) {
-        // 檢查文件是否還存在
-        const fileInfo = await FileSystem.getInfoAsync(cacheInfo.path);
-        if (fileInfo.exists) {
-          return cacheInfo.path;
-        } else {
-          // 文件不存在，清理元數據
-          delete metadata[cacheKey];
-          await this.saveCacheMetadata(metadata);
-        }
-      }
-      
-      return null;
-    } catch (error) {
-      logger.error('獲取緩存圖片路徑失敗:', error);
-      return null;
-    }
-  }
-
-  // 清理指定小說的所有緩存
-  async clearNovelCache(novelTitle: string): Promise<number> {
-    try {
-      const metadata = await this.getCacheMetadata();
-      let deletedCount = 0;
-      
-      const keysToDelete = Object.keys(metadata).filter(key => 
-        key.includes(novelTitle)
-      );
-      
-      for (const key of keysToDelete) {
-        const cacheInfo = metadata[key];
-        if (cacheInfo && cacheInfo.path) {
-          try {
-            await FileSystem.deleteAsync(cacheInfo.path);
-            delete metadata[key];
-            deletedCount++;
-          } catch (error) {
-            logger.warn('刪除緩存文件失敗:', error);
-          }
-        }
-      }
-      
-      if (deletedCount > 0) {
-        await this.saveCacheMetadata(metadata);
-      }
-      
-      return deletedCount;
-    } catch (error) {
-      logger.error('清理小說緩存失敗:', error);
-      return 0;
-    }
-  }
-
-  // 獲取緩存統計信息
-  async getCacheStats(): Promise<{ totalFiles: number; totalSize: number }> {
-    try {
-      const metadata = await this.getCacheMetadata();
-      let totalFiles = 0;
-      let totalSize = 0;
-      
-      for (const cacheInfo of Object.values(metadata)) {
-        if (cacheInfo.path) {
-          try {
-            const fileInfo = await FileSystem.getInfoAsync(cacheInfo.path);
-            if (fileInfo.exists) {
-              totalFiles++;
-              totalSize += fileInfo.size || 0;
-            }
-          } catch (error) {
-            // 忽略單個文件的錯誤
-          }
-        }
-      }
-      
-      return { totalFiles, totalSize };
-    } catch (error) {
-      logger.error('獲取緩存統計失敗:', error);
-      return { totalFiles: 0, totalSize: 0 };
-    }
-  }
-}
-
-// 圖片緩存管理函數（保持向後兼容）
-const getImageCacheKey = (type: 'cover' | 'content', novelTitle: string, imageName: string = '') => {
-  return type === 'cover' 
-    ? `image_cover_${novelTitle}` 
-    : `image_content_${novelTitle}_${imageName}`;
-};
-
-const clearImageCache = async (novelTitle: string): Promise<number> => {
-  try {
-    // 優先使用新的 ImageCacheManager
-    if (global.imageCacheManager) {
-      const deletedCount = await global.imageCacheManager.clearNovelCache(novelTitle);
-      return deletedCount;
-    }
-    
-    // 向後兼容：清理舊的 AsyncStorage 緩存
-    const keys = await AsyncStorage.getAllKeys();
-    const imageCacheKeys = keys.filter(key => 
-      key.startsWith(`image_cover_${novelTitle}`) || 
-      key.startsWith(`image_content_${novelTitle}`)
-    );
-    
-    if (imageCacheKeys.length > 0) {
-      await AsyncStorage.multiRemove(imageCacheKeys);
-    }
-    
-    return imageCacheKeys.length;
-  } catch (error) {
-    logger.error('清除圖片緩存失敗:', error);
-    return 0;
-  }
-};
-
-const getImageCacheSize = async (novelTitle?: string): Promise<number> => {
-  try {
-    // 優先使用新的 ImageCacheManager
-    if (global.imageCacheManager) {
-      const stats = await global.imageCacheManager.getCacheStats();
-      return stats.totalFiles;
-    }
-    
-    // 向後兼容：檢查舊的 AsyncStorage 緩存
-    const keys = await AsyncStorage.getAllKeys();
-    const imageCacheKeys = novelTitle 
-      ? keys.filter(key => key.startsWith(`image_cover_${novelTitle}`) || key.startsWith(`image_content_${novelTitle}`))
-      : keys.filter(key => key.startsWith('image_'));
-    
-    return imageCacheKeys.length;
-  } catch (error) {
-    logger.error('獲取圖片緩存大小失敗:', error);
-    return 0;
-  }
-};
 import { 
   PinchGestureHandler, 
   PanGestureHandler, 
@@ -1024,113 +786,31 @@ const cleanImageCache = () => {
   }
 };
 
-// 統一的緩存封面圖片組件
-const CachedCoverImage: React.FC<CachedCoverImageProps> = React.memo(({ 
-  coverPath, 
-  novelTitle, 
-  style, 
-  isDarkMode = false, 
-  onPress, 
-  forceRefresh = false 
+// 統一的緩存封面圖片組件（使用新的 CachedImage 組件）
+const CachedCoverImage: React.FC<CachedCoverImageProps> = React.memo(({
+  coverPath,
+  novelTitle,
+  style,
+  isDarkMode = false,
+  onPress,
+  forceRefresh = false
 }) => {
-  const [imageError, setImageError] = useState(false);
-  const [currentImageUri, setCurrentImageUri] = useState<string>('');
-  const [isLoading, setIsLoading] = useState(true);
-  
-  const resolvedCoverUrl = resolveCoverUrl(coverPath);
-  const cacheManager = ImageCacheManager.getInstance();
-
-  // 基於文件系統的圖片載入邏輯
-  useEffect(() => {
-    const loadImage = async () => {
-      try {
-        setImageError(false);
-        setIsLoading(true);
-        
-        // 1. 先檢查本地文件緩存
-        const cachedPath = await cacheManager.getCachedImagePath('cover', novelTitle);
-        if (cachedPath && !forceRefresh) {
-          setCurrentImageUri(cachedPath);
-          setIsLoading(false);
-        }
-        
-        // 2. 嘗試從網路獲取並緩存最新圖片
-        try {
-          const networkUrl = resolvedCoverUrl;
-          const downloadedPath = await cacheManager.cacheImage(networkUrl, 'cover', novelTitle);
-          
-          if (downloadedPath) {
-            // 網路圖片下載成功，更新顯示
-            setCurrentImageUri(downloadedPath);
-          } else if (!cachedPath) {
-            // 下載失敗且沒有緩存時設為錯誤
-            setImageError(true);
-          }
-        } catch (networkError) {
-          // 網路請求失敗，如果沒有緩存則顯示錯誤
-          if (!cachedPath) {
-            setImageError(true);
-          }
-          logger.warn('載入封面圖片失敗:', networkError);
-        }
-      } catch (error) {
-        logger.error('圖片載入過程出錯:', error);
-        setImageError(true);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadImage();
-  }, [novelTitle, coverPath, resolvedCoverUrl, forceRefresh, cacheManager]);
-
-  if (imageError) {
-    return (
-      <View style={[style, { backgroundColor: isDarkMode ? '#333' : '#f0f0f0', justifyContent: 'center', alignItems: 'center' }]}>
-        <Text style={{ color: isDarkMode ? '#888' : '#666', fontSize: 12 }}>
-          封面圖片
-        </Text>
-      </View>
-    );
-  }
-
-  const ImageComponent = (
-    <View style={style}>
-      <ExpoImage
-        source={{ uri: currentImageUri }}
-        style={style}
-        contentFit="cover"
-        onError={() => setImageError(true)}
-        transition={200}
-      />
-      {isLoading && (
-        <View style={[
-          {
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            justifyContent: 'center',
-            alignItems: 'center',
-            backgroundColor: 'rgba(0,0,0,0.3)'
-          }
-        ]}>
-          <ActivityIndicator size="small" color="#ffffff" />
-        </View>
-      )}
-    </View>
+  return (
+    <CachedImage
+      source={{
+        url: coverPath,
+        type: 'cover',
+        novelTitle: novelTitle
+      }}
+      style={style}
+      contentFit="cover"
+      onPress={onPress ? () => onPress() : undefined}
+      forceRefresh={forceRefresh}
+      isDarkMode={isDarkMode}
+      placeholderText="封面圖片"
+      showLoadingIndicator={true}
+    />
   );
-
-  if (onPress) {
-    return (
-      <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
-        {ImageComponent}
-      </TouchableOpacity>
-    );
-  }
-
-  return ImageComponent;
 }, (prevProps, nextProps) => {
   return (
     prevProps.coverPath === nextProps.coverPath &&
@@ -1142,82 +822,13 @@ const CachedCoverImage: React.FC<CachedCoverImageProps> = React.memo(({
 });
 
 const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMode, backgroundColor, onImagePress, novelTitle, chapterTitle }) => {
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const [currentImageUri, setCurrentImageUri] = useState<string>('');
   const screenWidth = Dimensions.get('window').width;
-  const isMounted = useRef(true);
 
-  useEffect(() => {
-    return () => {
-      isMounted.current = false;
-    };
-  }, []);
+  // 生成圖片標識（使用URL作為圖片名稱的一部分）
+  const imageName = src.split('/').pop()?.replace(/[^a-zA-Z0-9]/g, '_') || 'unknown';
 
-  const cleanUrl = useMemo(() => {
-    return resolveImageUrl(src);
-  }, [src]);
-
-  const cacheManager = ImageCacheManager.getInstance();
-
-  // 基於文件系統的圖片載入邏輯
-  useEffect(() => {
-    const loadImage = async () => {
-      if (!isMounted.current) return;
-      
-      try {
-        setError(false);
-        setIsLoading(true);
-        
-        // 生成圖片標識（使用URL作為圖片名稱的一部分）
-        const imageName = src.split('/').pop()?.replace(/[^a-zA-Z0-9]/g, '_') || 'unknown';
-        
-        // 生成章節特定的快取鍵（使用小說標題和章節標題）
-        const cacheKey = novelTitle && chapterTitle ? `${novelTitle}_${chapterTitle}` : 'current';
-        
-        // 1. 先檢查本地文件緩存
-        const cachedPath = await cacheManager.getCachedImagePath('content', cacheKey, imageName);
-        if (cachedPath && isMounted.current) {
-          setCurrentImageUri(cachedPath);
-          setIsLoading(false);
-        }
-        
-        // 2. 嘗試從網路獲取並緩存最新圖片
-        try {
-          const downloadedPath = await cacheManager.cacheImage(cleanUrl, 'content', cacheKey, imageName);
-          
-          if (downloadedPath && isMounted.current) {
-            // 網路圖片下載成功，更新顯示
-            setCurrentImageUri(downloadedPath);
-            
-            // 更新內存緩存
-            cleanImageCache();
-            imageCache.set(cleanUrl, true);
-          } else if (!cachedPath && isMounted.current) {
-            // 下載失敗且沒有緩存時設為錯誤
-            setError(true);
-          }
-        } catch (networkError) {
-          // 網路請求失敗，如果沒有緩存則顯示錯誤
-          if (!cachedPath && isMounted.current) {
-            setError(true);
-          }
-          logger.warn('載入章節圖片失敗:', networkError);
-        }
-      } catch (error) {
-        if (isMounted.current) {
-          logger.error('圖片載入過程出錯:', error);
-          setError(true);
-        }
-      } finally {
-        if (isMounted.current) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    loadImage();
-  }, [cleanUrl, src, cacheManager, novelTitle, chapterTitle]);
+  // 生成章節特定的快取鍵（使用小說標題和章節標題）
+  const cacheKey = novelTitle && chapterTitle ? `${novelTitle}_${chapterTitle}` : 'current';
 
   const imageStyles = useMemo(() => StyleSheet.create({
     container: {
@@ -1230,58 +841,30 @@ const MarkdownImage: React.FC<MarkdownImageProps> = React.memo(({ src, isDarkMod
       height: screenWidth,
       resizeMode: 'contain' as const,
       backgroundColor
-    },
-    loadingContainer: {
-      position: 'absolute',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      justifyContent: 'center',
-      alignItems: 'center',
-      backgroundColor
     }
   }), [screenWidth, backgroundColor]);
 
-  if (error) {
-    return (
-      <View style={imageStyles.container}>
-        <View style={imageStyles.loadingContainer}>
-          <Text style={{ color: isDarkMode ? '#ffffff' : '#000000' }}>圖片載入失敗</Text>
-        </View>
-      </View>
-    );
-  }
-
   return (
     <View style={imageStyles.container}>
-      <TouchableOpacity 
-        onPress={() => onImagePress?.(currentImageUri)}
-        activeOpacity={0.8}
-      >
-        <ExpoImage
-          source={{ uri: currentImageUri }}
-          style={imageStyles.image}
-          contentFit="contain"
-          onError={() => {
-            if (isMounted.current) {
-              setError(true);
-              setIsLoading(false);
-            }
-          }}
-          transition={200}
-        />
-      </TouchableOpacity>
-      {isLoading && (
-        <View style={imageStyles.loadingContainer}>
-          <ActivityIndicator size="large" color={isDarkMode ? '#ffffff' : '#000000'} />
-        </View>
-      )}
+      <CachedImage
+        source={{
+          url: src,
+          type: 'content',
+          novelTitle: cacheKey,
+          imageName: imageName
+        }}
+        style={imageStyles.image}
+        contentFit="contain"
+        onPress={onImagePress ? (uri) => onImagePress(uri) : undefined}
+        isDarkMode={isDarkMode}
+        placeholderText="圖片載入失敗"
+        showLoadingIndicator={true}
+      />
     </View>
   );
 }, (prevProps, nextProps) => {
-  return prevProps.src === nextProps.src && 
-         prevProps.isDarkMode === nextProps.isDarkMode && 
+  return prevProps.src === nextProps.src &&
+         prevProps.isDarkMode === nextProps.isDarkMode &&
          prevProps.backgroundColor === nextProps.backgroundColor &&
          prevProps.onImagePress === nextProps.onImagePress &&
          prevProps.novelTitle === nextProps.novelTitle &&
@@ -1370,11 +953,21 @@ const sendUpdateNotification = async (updates: UpdateInfo[]): Promise<void> => {
 const App: React.FC = () => {
   const insets = useSafeAreaInsets();
   
-  // 初始化全局 ImageCacheManager
+  // 初始化圖片緩存服務
   React.useEffect(() => {
-    if (!global.imageCacheManager) {
-      global.imageCacheManager = ImageCacheManager.getInstance();
-    }
+    const initializeImageCache = async () => {
+      try {
+        const cacheService = ImageCacheService.getInstance({
+          defaultImageUrl: 'https://raw.githubusercontent.com/xuerowo/myacgn/main/images/ImageError.png'
+        });
+        await cacheService.initialize();
+        logger.log('圖片緩存服務初始化完成');
+      } catch (error) {
+        logger.error('圖片緩存服務初始化失敗:', error);
+      }
+    };
+
+    initializeImageCache();
   }, []);
   
   const [novels, setNovels] = useState<Novel[]>([]);
@@ -2271,7 +1864,8 @@ const App: React.FC = () => {
                       }
 
                       // 刪除圖片緩存
-                      const deletedImageCount = await clearImageCache(novelName);
+                      const cacheService = ImageCacheService.getInstance();
+                      const deletedImageCount = await cacheService.clearNovelCache(novelName);
 
                       if (deletedCount > 0 || deletedImageCount > 0) {
                         let message = '';

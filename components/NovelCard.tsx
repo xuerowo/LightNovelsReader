@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { Image as ExpoImage } from 'expo-image';
 import { Novel } from '../types/novelTypes';
-import { resolveCoverUrl } from '../utils/pathUtils';
+import CachedImage from './CachedImage';
 
 interface NovelCardProps {
   novel: Novel;
@@ -10,12 +9,6 @@ interface NovelCardProps {
   isDarkMode?: boolean;
   forceRefresh?: boolean;
   onImagePress?: (imageUri: string) => void;
-  imageCacheManager?: any;
-}
-
-// 聲明全局 imageCacheManager
-declare global {
-  var imageCacheManager: any;
 }
 
 const formatDateTime = (dateStr: string) => {
@@ -58,103 +51,6 @@ const formatDateTime = (dateStr: string) => {
   return `${date.getFullYear()}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
 };
 
-// 文件緩存圖片組件
-const CachedImage: React.FC<{
-  novel: Novel;
-  isDarkMode: boolean;
-  forceRefresh: boolean;
-  onPress?: (uri: string) => void;
-}> = ({ novel, isDarkMode, forceRefresh, onPress }) => {
-  const [imageError, setImageError] = useState(false);
-  const [currentImageUri, setCurrentImageUri] = useState<string>('');
-  
-  const resolvedCoverUrl = resolveCoverUrl(novel.cover);
-
-  // 文件緩存的圖片載入邏輯
-  useEffect(() => {
-    const loadImage = async () => {
-      try {
-        setImageError(false);
-        
-        if (!global.imageCacheManager) {
-          console.warn('ImageCacheManager 未初始化');
-          setImageError(true);
-          return;
-        }
-        
-        // 1. 先檢查並顯示本地緩存文件
-        const cachedPath = await global.imageCacheManager.getCachedImagePath('cover', novel.title);
-        if (cachedPath && !forceRefresh) {
-          setCurrentImageUri(`file://${cachedPath}`);
-        }
-        
-        // 2. 嘗試從網路獲取最新圖片並緩存
-        try {
-          const networkCachedPath = await global.imageCacheManager.cacheImage(
-            resolvedCoverUrl,
-            'cover',
-            novel.title
-          );
-          
-          if (networkCachedPath) {
-            setCurrentImageUri(`file://${networkCachedPath}`);
-          } else if (!cachedPath) {
-            // 網路失敗且沒有本地緩存時設為錯誤
-            setImageError(true);
-          }
-        } catch (networkError) {
-          // 網路請求失敗，如果沒有本地緩存則顯示錯誤
-          if (!cachedPath) {
-            setImageError(true);
-          }
-          console.warn('網路載入封面圖片失敗:', networkError);
-        }
-      } catch (error) {
-        setImageError(true);
-        console.warn('載入封面圖片失敗:', error);
-      }
-    };
-
-    loadImage();
-  }, [novel.title, novel.cover, resolvedCoverUrl, forceRefresh]);
-
-  if (imageError) {
-    return (
-      <View style={[styles.placeholderContainer, { backgroundColor: isDarkMode ? '#333' : '#f0f0f0' }]}>
-        <Text style={[styles.placeholderText, { color: isDarkMode ? '#888' : '#666' }]}>
-          封面圖片
-        </Text>
-      </View>
-    );
-  }
-
-  const ImageComponent = (
-    <ExpoImage
-      source={{ uri: currentImageUri }}
-      style={styles.image}
-      contentFit="cover"
-      onError={() => setImageError(true)}
-      transition={200}
-    />
-  );
-
-  if (onPress) {
-    return (
-      <TouchableOpacity
-        onPress={(e) => {
-          e.stopPropagation();
-          onPress(currentImageUri);
-        }}
-        activeOpacity={0.8}
-        style={styles.imageWrapper}
-      >
-        {ImageComponent}
-      </TouchableOpacity>
-    );
-  }
-
-  return ImageComponent;
-};
 
 const NovelCard: React.FC<NovelCardProps> = ({
   novel,
@@ -178,10 +74,17 @@ const NovelCard: React.FC<NovelCardProps> = ({
     >
       <View style={[styles.imageContainer, { backgroundColor: isDarkMode ? '#1c1c1c' : '#ffffff' }]}>
         <CachedImage
-          novel={novel}
-          isDarkMode={isDarkMode}
-          forceRefresh={forceRefresh}
+          source={{
+            url: novel.cover,
+            type: 'cover',
+            novelTitle: novel.title
+          }}
+          style={styles.image}
+          contentFit="cover"
           onPress={onImagePress}
+          forceRefresh={forceRefresh}
+          isDarkMode={isDarkMode}
+          placeholderText="封面圖片"
         />
       </View>
       <View style={[
